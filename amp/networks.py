@@ -91,18 +91,24 @@ class ActorCritic(nn.Module):
         """Critic value estimate. Returns (N,)."""
         return self.critic(obs).squeeze(-1)
 
-    def evaluate(self, obs: Tensor, actions: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def evaluate(
+        self, obs: Tensor, actions: Tensor, critic_obs: Tensor | None = None
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Evaluate actions under current policy (with grad).
 
+        Args:
+            obs:        actor observation (N, obs_dim)
+            actions:    actions to evaluate (N, action_dim)
+            critic_obs: privileged critic observation (N, critic_obs_dim).
+                        Falls back to obs if None (e.g. no privileged info).
         Returns:
-            values:    (N,)
-            log_probs: (N,)
-            entropy:   (N,)
+            values, log_probs, entropy — each (N,)
         """
         dist = self._distribution(obs)
         log_probs = dist.log_prob(actions).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
-        values = self.critic(obs).squeeze(-1)
+        c_obs = critic_obs if critic_obs is not None else obs
+        values = self.critic(c_obs).squeeze(-1)
         return values, log_probs, entropy
 
 

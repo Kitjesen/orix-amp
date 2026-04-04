@@ -28,18 +28,19 @@ class RolloutBuffer:
         action_dim: int,
         amp_obs_dim: int,
         device: torch.device,
+        critic_obs_dim: int | None = None,
     ) -> None:
         self.num_envs  = num_envs
         self.num_steps = num_steps
         self.device    = device
 
+        c_dim = critic_obs_dim if critic_obs_dim is not None else obs_dim
         self.obs          = torch.zeros(num_steps, num_envs, obs_dim,     device=device)
+        self.critic_obs   = torch.zeros(num_steps, num_envs, c_dim,       device=device)
         self.actions      = torch.zeros(num_steps, num_envs, action_dim,  device=device)
         self.log_probs    = torch.zeros(num_steps, num_envs,              device=device)
         self.rewards      = torch.zeros(num_steps, num_envs,              device=device)
         self.values       = torch.zeros(num_steps, num_envs,              device=device)
-        # terminations: True only on real episode end (fall / early termination).
-        # truncations (time limit) do NOT count — we still bootstrap V(next) for those.
         self.terminations = torch.zeros(num_steps, num_envs,              device=device)
         self.amp_obs      = torch.zeros(num_steps, num_envs, amp_obs_dim, device=device)
 
@@ -55,10 +56,12 @@ class RolloutBuffer:
         log_probs: Tensor,
         rewards: Tensor,
         values: Tensor,
-        terminated: Tensor,   # True = real episode end (e.g. fall); NOT time-limit
+        terminated: Tensor,
         amp_obs: Tensor,
+        critic_obs: Tensor | None = None,
     ) -> None:
         self.obs[step]          = obs
+        self.critic_obs[step]   = critic_obs if critic_obs is not None else obs
         self.actions[step]      = actions
         self.log_probs[step]    = log_probs
         self.rewards[step]      = rewards
@@ -111,9 +114,10 @@ class RolloutBuffer:
 
         flat = {
             "obs":           self.obs.view(total, -1),
+            "critic_obs":    self.critic_obs.view(total, -1),
             "actions":       self.actions.view(total, -1),
             "log_probs_old": self.log_probs.view(total),
-            "values_old":    self.values.view(total),           # needed for clipped value loss
+            "values_old":    self.values.view(total),
             "returns":       self.returns.view(total),          # type: ignore[union-attr]
             "advantages":    self.advantages.view(total),
             "amp_obs":       self.amp_obs.view(total, -1),

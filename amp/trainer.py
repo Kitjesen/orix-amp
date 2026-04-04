@@ -152,12 +152,13 @@ class AMPTrainer:
 
     def _collect_rollout(self) -> RolloutBuffer:
         rollout = RolloutBuffer(
-            num_envs   = self.num_envs,
-            num_steps  = self.cfg.num_steps_per_env,
-            obs_dim    = self.obs_dim,
-            action_dim = self.action_dim,
-            amp_obs_dim= self.amp_obs_dim,
-            device     = self.device,
+            num_envs       = self.num_envs,
+            num_steps      = self.cfg.num_steps_per_env,
+            obs_dim        = self.obs_dim,
+            action_dim     = self.action_dim,
+            amp_obs_dim    = self.amp_obs_dim,
+            device         = self.device,
+            critic_obs_dim = self.critic_dim,
         )
 
         # Use cached obs if available (continuous across iterations)
@@ -179,7 +180,7 @@ class AMPTrainer:
             style_rew = self.discriminator.compute_style_reward(amp_obs, self.cfg.disc_reward_scale)
             total_rew = self._blend_reward(task_rew, style_rew)
 
-            rollout.add(step, obs, actions, log_probs, total_rew, values, terminated, amp_obs)
+            rollout.add(step, obs, actions, log_probs, total_rew, values, terminated, amp_obs, critic_obs)
             self.agent_buffer.add(amp_obs)
 
             obs        = obs_dict["policy"]
@@ -217,7 +218,9 @@ class AMPTrainer:
                 # Normalize advantages per mini-batch
                 adv_mb = (adv_mb - adv_mb.mean()) / (adv_mb.std() + 1e-8)
 
-                values, log_probs, entropy = self.actor_critic.evaluate(obs_mb, actions_mb)
+                values, log_probs, entropy = self.actor_critic.evaluate(
+                    obs_mb, actions_mb, critic_obs=mb["critic_obs"]
+                )
 
                 # Policy loss (PPO-clip)
                 ratio   = (log_probs - lp_old_mb).exp()
