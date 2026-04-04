@@ -178,7 +178,11 @@ class OrixAmpEnv(DirectRLEnv):
         for i in reversed(range(self.cfg.num_amp_observations - 1)):
             self.amp_observation_buffer[:, i + 1] = self.amp_observation_buffer[:, i]
         self.amp_observation_buffer[:, 0] = amp_obs
-        self.extras = {"amp_obs": self.amp_observation_buffer.view(-1, self.amp_observation_size)}
+        # Base extras — reward_terms will be merged in by _get_rewards()
+        self.extras = {
+            "amp_obs": self.amp_observation_buffer.view(-1, self.amp_observation_size),
+            "reward_terms": {},
+        }
 
         return {"policy": policy_obs, "critic": critic_obs}
 
