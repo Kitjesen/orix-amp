@@ -127,6 +127,13 @@ class AMPTrainer:
         self.it = 0
         os.makedirs(cfg.log_dir, exist_ok=True)
 
+        # Episode stat accumulators (reset each log interval)
+        self._ep_rew_sum    = torch.zeros(self.num_envs, device=device)
+        self._ep_len        = torch.zeros(self.num_envs, device=device)
+        self._ep_rew_terms: dict[str, list[float]] = {}
+        self._completed_ep_rews: list[float] = []
+        self._completed_ep_lens: list[float]  = []
+
     # ── Expert buffer ─────────────────────────────────────────────────────────
 
     def _prefill_expert_buffer(self, total: int) -> None:
@@ -182,6 +189,22 @@ class AMPTrainer:
 
             rollout.add(step, obs, actions, log_probs, total_rew, values, terminated, amp_obs, critic_obs)
             self.agent_buffer.add(amp_obs)
+
+            # Track episode stats
+            dones = terminated | truncated
+            self._ep_rew_sum += total_rew
+            self._ep_len     += 1
+            if dones.any():
+                done_ids = dones.nonzero(as_tuple=False).flatten()
+                self._completed_ep_rews.extend(self._ep_rew_sum[done_ids].tolist())
+                self._completed_ep_lens.extend(self._ep_len[done_ids].tolist())
+                self._ep_rew_sum[done_ids] = 0.0
+                self._ep_len[done_ids]     = 0.0
+
+            # Accumulate per-term rewards from env extras
+            if "reward_terms" in extras:
+                for k, v in extras["reward_terms"].items():
+                    self._ep_rew_terms.setdefault(k, []).append(v)
 
             obs        = obs_dict["policy"]
             critic_obs = obs_dict.get("critic", obs)
@@ -329,17 +352,36 @@ class AMPTrainer:
 
             if (it + 1) % 10 == 0:
                 elapsed = time.time() - start_time
-                lr = self.optimizer_ac.param_groups[0]["lr"]
+                lr      = self.optimizer_ac.param_groups[0]["lr"]
+                mean_ep_rew = sum(self._completed_ep_rews) / max(len(self._completed_ep_rews), 1)
+                mean_ep_len = sum(self._completed_ep_lens) / max(len(self._completed_ep_lens), 1)
+
+                sep = "─" * 80
+                print(f"\n{sep}")
                 print(
-                    f"[{it+1:5d}/{num_iterations}] "
-                    f"rew={mean_rew:.3f}  ret={mean_ret:.3f}  "
-                    f"pol={ppo_stats['ppo/policy_loss']:.4f}  "
-                    f"val={ppo_stats['ppo/value_loss']:.4f}  "
-                    f"disc={disc_stats['disc/loss_total']:.4f}  "
-                    f"acc_r={disc_stats['disc/acc_expert']:.2f}/"
-                    f"{disc_stats['disc/acc_agent']:.2f}  "
-                    f"fps={fps:.0f}  lr={lr:.2e}  t={elapsed:.0f}s"
+                    f"  Learning iteration {it+1:5d}/{num_iterations}"
+                    f"   fps={fps:.0f}   lr={lr:.2e}   t={elapsed:.0f}s"
                 )
+                print(f"{sep}")
+                print(f"  {'Mean episode reward':40s}: {mean_ep_rew:8.3f}")
+                print(f"  {'Mean episode length':40s}: {mean_ep_len:8.1f}")
+                print(f"  {'Mean step reward':40s}: {mean_rew:8.3f}")
+                print(f"  {'PPO policy loss':40s}: {ppo_stats['ppo/policy_loss']:8.4f}")
+                print(f"  {'PPO value loss':40s}: {ppo_stats['ppo/value_loss']:8.4f}")
+                print(f"  {'AMP disc loss':40s}: {disc_stats['disc/loss_total']:8.4f}")
+                print(f"  {'AMP disc acc (expert/agent)':40s}: "
+                      f"{disc_stats['disc/acc_expert']:.2f}/{disc_stats['disc/acc_agent']:.2f}")
+                if self._ep_rew_terms:
+                    print(f"  {'─'*38}")
+                    for k, vals in sorted(self._ep_rew_terms.items()):
+                        mean_v = sum(vals) / len(vals)
+                        print(f"  {'Episode_Reward/' + k:40s}: {mean_v:8.4f}")
+                print(f"{sep}\n")
+
+                # Reset accumulators
+                self._completed_ep_rews.clear()
+                self._completed_ep_lens.clear()
+                self._ep_rew_terms.clear()
 
             # 5. Checkpoint
             if (it + 1) % self.cfg.save_interval == 0:

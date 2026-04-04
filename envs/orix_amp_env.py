@@ -339,6 +339,27 @@ class OrixAmpEnv(DirectRLEnv):
             + rew_imit_jp + rew_imit_jv
             + rew_term
         )
+
+        # Expose per-term breakdown for logging
+        self.extras["reward_terms"] = {
+            "track_lin_vel":     rew_track_lin.mean().item(),
+            "track_ang_vel":     rew_track_ang.mean().item(),
+            "upward":            rew_upward.mean().item(),
+            "lin_vel_z":         rew_lin_vel_z.mean().item(),
+            "ang_vel_xy":        rew_ang_vel_xy.mean().item(),
+            "feet_air_time":     rew_air_time.mean().item(),
+            "feet_air_var":      rew_air_var.mean().item(),
+            "feet_gait":         rew_gait.mean().item(),
+            "feet_slide":        rew_slide.mean().item(),
+            "stand_still":       rew_stand.mean().item(),
+            "action_rate":       rew_action_rate.mean().item(),
+            "joint_torques":     rew_torques.mean().item(),
+            "joint_acc":         rew_joint_acc.mean().item(),
+            "joint_limits":      rew_limits.mean().item(),
+            "imitation_jp":      rew_imit_jp.mean().item(),
+            "imitation_jv":      rew_imit_jv.mean().item(),
+            "termination":       rew_term.mean().item(),
+        }
         return total
 
     # ── Termination ───────────────────────────────────────────────────────────
