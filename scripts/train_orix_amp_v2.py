@@ -47,7 +47,7 @@ class OrixAmpVecEnvWrapper(RslRlVecEnvWrapper):
         super().__init__(env)
         robot = self.unwrapped.scene["robot"]
         self._amp_foot_ids = []
-        for name in ["FL_calf", "FR_calf", "RL_calf", "RR_calf"]:
+        for name in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]:
             self._amp_foot_ids.append(robot.data.body_names.index(name))
         print(f"[OrixAMP] foot_ids={self._amp_foot_ids}")
 
@@ -178,7 +178,8 @@ def main():
     log_dir = os.path.join(PROJECT_DIR, "logs", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     os.makedirs(log_dir, exist_ok=True)
 
-    runner = AmpOnPolicyRunner(env=env, train_cfg=train_cfg, log_dir=log_dir, device="cuda:0")
+    device = env.unwrapped.device
+    runner = AmpOnPolicyRunner(env=env, train_cfg=train_cfg, log_dir=log_dir, device=device)
 
     if args.resume:
         runner.load(args.resume)

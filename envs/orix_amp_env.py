@@ -127,7 +127,8 @@ class OrixAmpEnv(DirectRLEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         with torch.no_grad():
-            current_times = (self.episode_length_buf * self.physics_dt).cpu().numpy()
+            # step_dt = decimation * sim.dt (policy-level time, not physics sub-step time)
+            current_times = (self.episode_length_buf * self.step_dt).cpu().numpy()
             (
                 ref_dof_pos, ref_dof_vel,
                 ref_body_pos, ref_body_rot, _, _,
