@@ -79,7 +79,7 @@ class OrixDogRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
             ["FR_(hip|thigh|calf).*", "RL_(hip|thigh|calf).*"],
             ["FL_(hip|thigh|calf).*", "RR_(hip|thigh|calf).*"],
         ]
-        self.rewards.action_rate_l2.weight = -0.5
+        self.rewards.action_rate_l2.weight = -0.01
         self.rewards.undesired_contacts.weight = -1.0
         self.rewards.undesired_contacts.params["sensor_cfg"].body_names = ["base_link"]
         self.rewards.contact_forces.weight = -1.5e-4
