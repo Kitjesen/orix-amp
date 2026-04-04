@@ -39,6 +39,9 @@ ORIX_DOG_CFG = ArticulationCfg(
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=4,
         ),
+        joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
+            gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
+        ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.35),  # slightly above standing height
