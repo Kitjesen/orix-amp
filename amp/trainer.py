@@ -201,9 +201,8 @@ class AMPTrainer:
                 self._ep_rew_sum[done_ids] = 0.0
                 self._ep_len[done_ids]     = 0.0
 
-            # Accumulate per-term rewards — read directly from env.extras (updated by _get_rewards)
-            env_reward_terms = getattr(self.env, "extras", {}).get("reward_terms", {})
-            for k, v in env_reward_terms.items():
+            # Accumulate per-term rewards from step extras
+            for k, v in extras.get("reward_terms", {}).items():
                 self._ep_rew_terms.setdefault(k, []).append(v)
 
             obs        = obs_dict["policy"]
