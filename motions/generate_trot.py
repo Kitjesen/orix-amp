@@ -58,11 +58,12 @@ def generate_trot_motion(
     ]
     num_bodies = len(body_names)
 
-    # ── Default standing pose (radians) ──
-    # hip=0, thigh=-0.7 (forward), calf=-1.4 (bent)
+    # ── Default standing pose (radians) — must match init_state joint_pos ──
+    # Front legs (FL/FR): thigh=+0.65, calf=-1.5
+    # Rear legs (RL/RR): thigh=-0.65, calf=+1.5
     default_hip = 0.0
-    default_thigh = 0.7    # positive = forward for front legs
-    default_calf = -1.4    # negative = bent
+    default_thigh = 0.65   # magnitude for front legs (positive = forward)
+    default_calf = -1.5    # front legs calf (negative = bent down)
 
     # ── Generate trot gait ──
     dof_positions = np.zeros((num_frames, 12), dtype=np.float32)
@@ -94,12 +95,12 @@ def generate_trot_motion(
 
             # Front legs: thigh positive = forward
             # Rear legs: thigh sign flipped for rear locomotion
-            if leg_idx >= 2:  # rear legs
+            if leg_idx >= 2:  # rear legs (RL, RR): thigh=-0.65, calf=+1.5
                 thigh_sign = -1.0
-                calf_default = 1.4  # rear legs calf is positive
-            else:  # front legs
+                calf_default = 1.5  # rear legs calf is positive
+            else:  # front legs (FL, FR): thigh=+0.65, calf=-1.5
                 thigh_sign = 1.0
-                calf_default = -1.4
+                calf_default = -1.5
 
             dof_positions[frame, hip_idx] = default_hip + hip_swing
             dof_positions[frame, thigh_idx] = thigh_sign * (default_thigh + thigh_swing)

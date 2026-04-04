@@ -13,6 +13,8 @@ amp-rsl-rl AMPOnPolicyRunner expects:
 
 from __future__ import annotations
 
+import os
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg
 from isaaclab.assets import ArticulationCfg
@@ -35,7 +37,7 @@ ORIX_DOG_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
         merge_fixed_joints=True,
-        asset_path="/home/bsrl/hongsenpang/RLbased/robot_lab/source/robot_lab/robot_lab/data/Robots/orix_dog/urdf/orix_dog.urdf",
+        asset_path=os.path.join(os.path.dirname(__file__), "..", "urdf", "orix_dog.urdf"),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -54,10 +56,11 @@ ORIX_DOG_CFG = ArticulationCfg(
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.35),
         joint_pos={
-            "FL_hip_joint": 0.0, "FL_thigh_joint": 0.7, "FL_calf_joint": -1.4,
-            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.7, "FR_calf_joint": 1.4,
-            "RL_hip_joint": 0.0, "RL_thigh_joint": 0.7, "RL_calf_joint": -1.4,
-            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.7, "RR_calf_joint": 1.4,
+            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.65, "FR_calf_joint": 1.5,
+            "FL_hip_joint": 0.0, "FL_thigh_joint": 0.65, "FL_calf_joint": -1.5,
+            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.65, "RR_calf_joint": 1.5,
+            "RL_hip_joint": 0.0, "RL_thigh_joint": 0.65, "RL_calf_joint": -1.5,
+            ".*_foot_joint": 0.0,
         },
         joint_vel={".*": 0.0},
     ),
@@ -68,8 +71,8 @@ ORIX_DOG_CFG = ArticulationCfg(
             effort_limit=18.0,
             saturation_effort=18.0,
             velocity_limit=35.0,
-            stiffness=12.5,
-            damping=0.3,
+            stiffness=25.0,
+            damping=0.5,
             friction=0.0,
         ),
     },

@@ -3,6 +3,8 @@
 *.mp4
 *.npy
 *.npz
+# Track generated reference motion files needed for training
+!motions/*.npz
 __pycache__/
 *.pyc
 logs/

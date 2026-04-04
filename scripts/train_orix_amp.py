@@ -2,9 +2,11 @@
 """Train Orix Dog AMP with amp-rsl-rl + Isaac Lab Manager-based env.
 
 Usage:
-    cd /home/bsrl/hongsenpang/RLbased/robot_lab
-    CUDA_VISIBLE_DEVICES=4 python /path/to/train_orix_amp.py \
-        --num_envs 4096 --headless --max_iterations 10000
+    cd <repo_root>
+    python scripts/train_orix_amp.py --num_envs 4096 --headless --max_iterations 10000
+
+Note: requires converting raw A1 motions first:
+    python motions/convert_to_amp_rsl_rl.py <a1_raw_dir>
 """
 
 import argparse
@@ -103,7 +105,8 @@ def main():
 
         # AMP motion data
         "amp_data_path": motion_data_dir,
-        "dataset_names": ["orix_trot1", "orix_trot2", "orix_hop1", "orix_hop2"],
+        # Names match .npy files produced by motions/convert_to_amp_rsl_rl.py
+        "dataset_names": ["orix_amp_trot1", "orix_amp_trot2", "orix_amp_hop1", "orix_amp_hop2"],
         "dataset_weights": [1.0, 1.0, 0.5, 0.5],  # trot weighted more
         "slow_down_factor": 1,
     }
