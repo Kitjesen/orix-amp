@@ -137,16 +137,16 @@ class OrixAmpVecEnvWrapper(RslRlVecEnvWrapper):
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
-    from robot_lab.tasks.manager_based.locomotion.velocity.config.quadruped.orix_dog.flat_env_cfg \
-        import OrixDogFlatEnvCfg
+    # Register orix env IDs from repo config/
+    sys.path.insert(0, PROJECT_DIR)
+    import config  # noqa: triggers gym.register for OrixAmp-* envs
 
-    # Build env and apply reward weight fixes
+    from config.flat_env_cfg import OrixDogFlatEnvCfg
+
     env_cfg = OrixDogFlatEnvCfg()
     env_cfg.scene.num_envs = args.num_envs
-    env_cfg.rewards.action_rate_l2.weight = -0.5    # was -0.01 → smooth actions
-    env_cfg.rewards.joint_pos_limits.weight = -5.0  # was -2.0 → hard limit enforcement
 
-    env = gym.make("RobotLab-Isaac-Velocity-Flat-OrixDog-v0", cfg=env_cfg)
+    env = gym.make("OrixAmp-Isaac-Velocity-Flat-v0", cfg=env_cfg)
     env = OrixAmpVecEnvWrapper(env)
 
     motion_dir = os.path.join(PROJECT_DIR, "motions")
@@ -157,7 +157,7 @@ def main():
 
     train_cfg = {
         "runner_class_name": "AmpOnPolicyRunner",
-        "experiment_name": "orix_dog_amp_v3",
+        "experiment_name": "orix_dog_amp",
         "run_name": "",
         "num_steps_per_env": 24,
         "max_iterations": args.max_iterations,

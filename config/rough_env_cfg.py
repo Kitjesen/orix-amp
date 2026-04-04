@@ -1,7 +1,7 @@
 from isaaclab.utils import configclass
 from robot_lab.tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 import math
-from robot_lab.assets.orix_dog import ORIX_DOG_CFG  # isort: skip
+from .orix_dog import ORIX_DOG_CFG  # isort: skip
 
 
 @configclass
