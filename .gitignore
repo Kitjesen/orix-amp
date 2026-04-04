@@ -1,0 +1,11 @@
+*.pt
+*.onnx
+*.mp4
+*.npy
+*.npz
+__pycache__/
+*.pyc
+logs/
+a1_raw/
+amp_hw_raw/
+motion_imit_raw/
