@@ -226,11 +226,8 @@ class AMPTrainer:
 
                 # Value loss
                 if self.cfg.use_clipped_value_loss:
-                    # Re-use stored values as baseline for clipping
-                    val_old = rollout.values.view(-1)[
-                        torch.randperm(rollout.values.numel(), device=self.device)[: values.shape[0]]
-                    ]  # rough approximation — proper impl would pass val_old through mb
-                    v_clipped = val_old + (values - val_old).clamp(-self.cfg.clip_param, self.cfg.clip_param)
+                    val_old_mb = mb["values_old"]
+                    v_clipped = val_old_mb + (values - val_old_mb).clamp(-self.cfg.clip_param, self.cfg.clip_param)
                     val_loss  = torch.max(
                         (values - ret_mb).pow(2),
                         (v_clipped - ret_mb).pow(2)

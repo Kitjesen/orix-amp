@@ -80,12 +80,8 @@ class RolloutBuffer:
         gae   = torch.zeros(self.num_envs, device=self.device)
 
         for t in reversed(range(self.num_steps)):
-            if t == self.num_steps - 1:
-                next_val   = last_values
-                next_nterm = 1.0 - self.dones[t]
-            else:
-                next_val   = self.values[t + 1]
-                next_nterm = 1.0 - self.dones[t]
+            next_nterm = 1.0 - self.dones[t]
+            next_val   = last_values if t == self.num_steps - 1 else self.values[t + 1]
 
             delta = self.rewards[t] + gamma * next_val * next_nterm - self.values[t]
             gae   = delta + gamma * lam * next_nterm * gae
@@ -113,6 +109,7 @@ class RolloutBuffer:
             "obs":           self.obs.view(total, -1),
             "actions":       self.actions.view(total, -1),
             "log_probs_old": self.log_probs.view(total),
+            "values_old":    self.values.view(total),           # needed for clipped value loss
             "returns":       self.returns.view(total),          # type: ignore[union-attr]
             "advantages":    self.advantages.view(total),
             "amp_obs":       self.amp_obs.view(total, -1),

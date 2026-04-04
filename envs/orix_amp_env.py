@@ -98,10 +98,13 @@ class OrixAmpEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         progress = (self.episode_length_buf.float() / (self.max_episode_length - 1)).unsqueeze(-1)
 
-        root_pos_rel = self.robot.data.body_pos_w[:, self.ref_body_index] - self.scene.env_origins
-        key_body_pos_rel = (
-            self.robot.data.body_pos_w[:, self.key_body_indexes]
-            - self.scene.env_origins.unsqueeze(1)
+        root_pos_w = self.robot.data.body_pos_w[:, self.ref_body_index]   # (N, 3) world frame
+        root_pos_rel = root_pos_w - self.scene.env_origins                # (N, 3) env-local
+
+        # Key body positions relative to root — translation-invariant, matches motion data
+        key_body_pos_root_rel = (
+            self.robot.data.body_pos_w[:, self.key_body_indexes]          # (N, 4, 3)
+            - root_pos_w.unsqueeze(1)                                     # (N, 1, 3)
         )
 
         # AMP obs: no progress — must match features extractable from motion reference data
@@ -110,7 +113,7 @@ class OrixAmpEnv(DirectRLEnv):
             self.robot.data.joint_vel,                                    # 12
             root_pos_rel,                                                 # 3
             self.robot.data.body_quat_w[:, self.ref_body_index],         # 4
-            key_body_pos_rel.reshape(self.num_envs, -1),                 # 4*3=12
+            key_body_pos_root_rel.reshape(self.num_envs, -1),            # 4*3=12
         ], dim=-1)  # total = 43
 
         # Policy obs: AMP obs + progress for episode conditioning
@@ -216,7 +219,11 @@ class OrixAmpEnv(DirectRLEnv):
         ref_root_quat = body_rot[:, self.motion_ref_body_index]       # (N, 4)
 
         if self.motion_key_body_indexes:
-            ref_key_body_pos = body_pos[:, self.motion_key_body_indexes]  # (N, 4, 3)
+            # Root-relative: subtract root pos from each key body — matches env AMP obs
+            ref_key_body_pos = (
+                body_pos[:, self.motion_key_body_indexes]                 # (N, 4, 3)
+                - ref_root_pos.unsqueeze(1)                               # (N, 1, 3)
+            )
             ref_key_body_flat = ref_key_body_pos.reshape(num_samples, -1)  # (N, 12)
         else:
             ref_key_body_flat = torch.zeros(num_samples, 12, device=self.device)

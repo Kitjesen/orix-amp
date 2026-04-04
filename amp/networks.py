@@ -51,9 +51,11 @@ class ActorCritic(nn.Module):
         self._init_weights()
 
     def _init_weights(self) -> None:
+        actor_out = self.actor[-1]   # the final Linear of the actor MLP
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.orthogonal_(m.weight, gain=0.01 if m.out_features == self.actor[-1].out_features else 1.0)
+                gain = 0.01 if m is actor_out else 1.0
+                nn.init.orthogonal_(m.weight, gain=gain)
                 nn.init.zeros_(m.bias)
 
     # ── Forward helpers ──
@@ -129,16 +131,14 @@ class AMPDiscriminator(nn.Module):
     def compute_style_reward(self, amp_obs: Tensor, reward_scale: float = 2.0) -> Tensor:
         """Compute AMP style reward from agent observations.
 
-        r_style = reward_scale * log_sigmoid(logit)  — large when agent looks like expert.
-        Clamped to [0, inf) so reward is always non-negative.
+        r_style = reward_scale * sigmoid(logit)  ∈ [0, reward_scale]
+        High when discriminator thinks agent looks like expert (logit >> 0).
 
         Returns: (B,)
         """
         with torch.no_grad():
             logit = self.forward(amp_obs)                       # (B, 1)
-            # -log(1 + exp(-logit)) = log(sigmoid(logit))
-            r = -torch.nn.functional.softplus(-logit)          # log sigmoid
-            r = reward_scale * r.squeeze(-1).clamp(min=0.0)
+            r = reward_scale * torch.sigmoid(logit).squeeze(-1)  # (B,) ∈ [0, reward_scale]
         return r
 
     def compute_loss(
