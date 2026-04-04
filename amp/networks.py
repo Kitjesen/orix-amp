@@ -30,7 +30,11 @@ def _mlp(dims: list[int], activation: str, output_activation: bool = False) -> n
 # ── Actor-Critic ──────────────────────────────────────────────────────────────
 
 class ActorCritic(nn.Module):
-    """Separate actor and critic MLPs with a shared Normal distribution policy."""
+    """Separate actor and critic MLPs with a shared Normal distribution policy.
+
+    actor uses policy obs (realizable on real robot).
+    critic uses privileged obs (sim-only: + base_lin_vel, contact, height_scan).
+    """
 
     def __init__(
         self,
@@ -40,10 +44,12 @@ class ActorCritic(nn.Module):
         critic_hidden: list[int] = (512, 256, 128),
         init_noise_std: float = 1.0,
         activation: str = "elu",
+        critic_obs_dim: int | None = None,   # if None, uses same obs_dim as actor
     ) -> None:
         super().__init__()
+        c_dim = critic_obs_dim if critic_obs_dim is not None else obs_dim
         self.actor = _mlp([obs_dim, *actor_hidden, action_dim], activation)
-        self.critic = _mlp([obs_dim, *critic_hidden, 1], activation)
+        self.critic = _mlp([c_dim, *critic_hidden, 1], activation)
         # Learnable log std (scalar, shared across all action dims)
         self.log_std = nn.Parameter(
             torch.full((action_dim,), fill_value=torch.log(torch.tensor(init_noise_std)))

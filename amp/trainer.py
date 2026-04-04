@@ -86,18 +86,20 @@ class AMPTrainer:
         self.device = device
 
         # Dimensions from env
-        self.obs_dim     = env.cfg.observation_space   # 44
-        self.action_dim  = env.cfg.action_space        # 12
-        self.amp_obs_dim = env.amp_observation_size    # 3 * 43 = 129
-        self.num_envs    = env.num_envs
+        self.obs_dim      = env.cfg.observation_space   # 41 (actor)
+        self.critic_dim   = env.cfg.state_space or env.cfg.observation_space  # 73 (privileged)
+        self.action_dim   = env.cfg.action_space        # 12
+        self.amp_obs_dim  = env.amp_observation_size    # 3 * 40 = 120
+        self.num_envs     = env.num_envs
 
         # Networks
         self.actor_critic = ActorCritic(
-            obs_dim      = self.obs_dim,
-            action_dim   = self.action_dim,
-            actor_hidden = cfg.actor_hidden,
-            critic_hidden= cfg.critic_hidden,
+            obs_dim        = self.obs_dim,
+            action_dim     = self.action_dim,
+            actor_hidden   = cfg.actor_hidden,
+            critic_hidden  = cfg.critic_hidden,
             init_noise_std = cfg.init_noise_std,
+            critic_obs_dim = self.critic_dim,
         ).to(device)
 
         self.discriminator = AMPDiscriminator(
@@ -161,34 +163,32 @@ class AMPTrainer:
         # Use cached obs if available (continuous across iterations)
         if self._current_obs is None:
             obs_dict, _ = self.env.reset()
-            obs = obs_dict["policy"]
+            obs        = obs_dict["policy"]
+            critic_obs = obs_dict.get("critic", obs)
         else:
-            obs = self._current_obs
+            obs, critic_obs = self._current_obs
 
         self.actor_critic.eval()
         for step in range(self.cfg.num_steps_per_env):
             actions, log_probs = self.actor_critic.act(obs)
-            values             = self.actor_critic.get_value(obs)
+            values             = self.actor_critic.get_value(critic_obs)
 
             obs_dict, task_rew, terminated, truncated, extras = self.env.step(actions)
-            amp_obs = extras["amp_obs"]                        # (N, 129)
+            amp_obs = extras["amp_obs"]
 
-            # Discriminator style reward
             style_rew = self.discriminator.compute_style_reward(amp_obs, self.cfg.disc_reward_scale)
-
-            # Blend task + style reward
             total_rew = self._blend_reward(task_rew, style_rew)
 
-            # NOTE: pass terminated only — truncation (time limit) keeps bootstrap value in GAE
             rollout.add(step, obs, actions, log_probs, total_rew, values, terminated, amp_obs)
             self.agent_buffer.add(amp_obs)
 
-            obs = obs_dict["policy"]
+            obs        = obs_dict["policy"]
+            critic_obs = obs_dict.get("critic", obs)
 
-        self._current_obs = obs
+        self._current_obs = (obs, critic_obs)
 
-        # Bootstrap value for GAE
-        last_val = self.actor_critic.get_value(obs)
+        # Bootstrap value from privileged critic obs
+        last_val = self.actor_critic.get_value(critic_obs)
         rollout.compute_returns(last_val, self.cfg.gamma, self.cfg.lam)
         return rollout
 

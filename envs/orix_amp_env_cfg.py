@@ -103,13 +103,19 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     dt = 1 / 120          # physics dt
 
     # ── Spaces ──
-    # policy obs: joint_pos(12) + joint_vel(12) + root_pos(3) + root_quat(4) + key_body_pos(4*3) + progress(1)
-    observation_space = 12 + 12 + 3 + 4 + 4 * 3 + 1  # = 44
-    action_space = 12     # 12 DOF leg joints
-    state_space = 0
+    # AMP obs (realizable on real robot):
+    #   joint_pos(12) + joint_vel(12) + base_height(1) + projected_gravity(3) + key_body_pos(12) = 40
+    # Actor obs = AMP obs + progress(1) = 41
+    # Critic obs (privileged, sim only):
+    #   actor(41) + base_lin_vel(3) + feet_contact(4) + height_scan(25) = 73
+    observation_space = 12 + 12 + 1 + 3 + 4 * 3 + 1   # actor = 41
+    action_space = 12
+    state_space = 41 + 3 + 4 + 25                      # critic = 73
     num_amp_observations = 3
-    # AMP obs excludes progress (not present in motion reference data): 12+12+3+4+12 = 43
-    amp_observation_space = 43
+    amp_observation_space = 12 + 12 + 1 + 3 + 4 * 3   # AMP = 40
+    # Height scanner: 5×5 grid, 0.2m spacing → 25 scan points
+    height_scan_size: tuple = (1.0, 1.0)   # metres (full extent)
+    height_scan_resolution: float = 0.25   # metres per sample → 5×5 = 25 pts
 
     early_termination = True
     termination_height = 0.15  # lower than G1 since orix is small

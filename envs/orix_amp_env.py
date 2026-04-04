@@ -28,6 +28,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from motions.motion_loader_quad import QuadMotionLoader
 
 
+def _quat_rotate_inverse(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """Rotate vector v by the inverse of quaternion q (wxyz convention)."""
+    w, x, y, z = q[:, 0:1], q[:, 1:2], q[:, 2:3], q[:, 3:4]
+    # v' = q^{-1} v q  (passive rotation: body-frame coords of world vector)
+    t = 2.0 * torch.cross(torch.cat([x, y, z], dim=-1), v, dim=-1)
+    return v - w * t + torch.cross(torch.cat([x, y, z], dim=-1), t, dim=-1)
+
+
 class OrixAmpEnv(DirectRLEnv):
     cfg: OrixAmpEnvCfg
 
@@ -98,34 +106,78 @@ class OrixAmpEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         progress = (self.episode_length_buf.float() / (self.max_episode_length - 1)).unsqueeze(-1)
 
-        root_pos_w = self.robot.data.body_pos_w[:, self.ref_body_index]   # (N, 3) world frame
-        root_pos_rel = root_pos_w - self.scene.env_origins                # (N, 3) env-local
+        root_pos_w   = self.robot.data.body_pos_w[:, self.ref_body_index]   # (N, 3)
+        root_quat_w  = self.robot.data.body_quat_w[:, self.ref_body_index]  # (N, 4) wxyz
 
-        # Key body positions relative to root — translation-invariant, matches motion data
+        # base_height: z above ground (env-relative) — 1D, IMU-estimable
+        base_height = (root_pos_w[:, 2] - self.scene.env_origins[:, 2]).unsqueeze(-1)  # (N, 1)
+
+        # projected_gravity: gravity vec in body frame — IMU-measurable (roll/pitch, yaw-invariant)
+        gravity_w = torch.tensor([0.0, 0.0, -1.0], device=self.device).expand(self.num_envs, 3)
+        projected_gravity = _quat_rotate_inverse(root_quat_w, gravity_w)   # (N, 3)
+
+        # key_body positions relative to root (FK-computable on real robot)
         key_body_pos_root_rel = (
-            self.robot.data.body_pos_w[:, self.key_body_indexes]          # (N, 4, 3)
-            - root_pos_w.unsqueeze(1)                                     # (N, 1, 3)
-        )
+            self.robot.data.body_pos_w[:, self.key_body_indexes]  # (N, 4, 3)
+            - root_pos_w.unsqueeze(1)
+        ).reshape(self.num_envs, -1)                              # (N, 12)
 
-        # AMP obs: no progress — must match features extractable from motion reference data
+        # ── AMP obs (40D) — all realizable on real robot ──────────────────────
         amp_obs = torch.cat([
-            self.robot.data.joint_pos,                                    # 12
-            self.robot.data.joint_vel,                                    # 12
-            root_pos_rel,                                                 # 3
-            self.robot.data.body_quat_w[:, self.ref_body_index],         # 4
-            key_body_pos_root_rel.reshape(self.num_envs, -1),            # 4*3=12
-        ], dim=-1)  # total = 43
+            self.robot.data.joint_pos,   # 12  encoder
+            self.robot.data.joint_vel,   # 12  encoder
+            base_height,                 #  1  IMU/barometer
+            projected_gravity,           #  3  IMU
+            key_body_pos_root_rel,       # 12  FK
+        ], dim=-1)  # 40
 
-        # Policy obs: AMP obs + progress for episode conditioning
-        obs = torch.cat([amp_obs, progress], dim=-1)  # 44
+        # ── Actor obs (41D) ───────────────────────────────────────────────────
+        policy_obs = torch.cat([amp_obs, progress], dim=-1)  # 41
 
-        # Update AMP observation history
+        # ── Critic obs (73D) — privileged sim-only info ───────────────────────
+        base_lin_vel = _quat_rotate_inverse(root_quat_w, self.robot.data.root_lin_vel_w)  # (N, 3)
+        # Contact forces on feet: scalar magnitude per foot (4D)
+        feet_contact = torch.zeros(self.num_envs, 4, device=self.device)
+        if hasattr(self.robot.data, "net_contact_force_w"):
+            foot_forces = self.robot.data.net_contact_force_w[:, self.key_body_indexes]  # (N, 4, 3)
+            feet_contact = foot_forces.norm(dim=-1)                                      # (N, 4)
+        # Height scan: 5×5 grid around robot base (25D)
+        height_scan = self._get_height_scan(root_pos_w)  # (N, 25)
+
+        critic_obs = torch.cat([
+            policy_obs,      # 41
+            base_lin_vel,    #  3  ground truth from sim
+            feet_contact,    #  4  contact forces per foot
+            height_scan,     # 25  terrain height around robot
+        ], dim=-1)  # 73
+
+        # ── AMP history buffer ────────────────────────────────────────────────
         for i in reversed(range(self.cfg.num_amp_observations - 1)):
             self.amp_observation_buffer[:, i + 1] = self.amp_observation_buffer[:, i]
         self.amp_observation_buffer[:, 0] = amp_obs
         self.extras = {"amp_obs": self.amp_observation_buffer.view(-1, self.amp_observation_size)}
 
-        return {"policy": obs}
+        return {"policy": policy_obs, "critic": critic_obs}
+
+    def _get_height_scan(self, root_pos_w: torch.Tensor) -> torch.Tensor:
+        """Simple 5×5 height scan grid around robot base (25 points, 0.25m spacing).
+
+        Returns heights relative to robot base z.
+        Falls back to zeros if terrain height not queryable.
+        """
+        N = self.num_envs
+        # 5×5 grid offsets: -0.5, -0.25, 0, 0.25, 0.5 m
+        offsets = torch.linspace(-0.5, 0.5, 5, device=self.device)
+        grid_x, grid_y = torch.meshgrid(offsets, offsets, indexing="ij")  # (5, 5)
+        grid_flat = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=-1)  # (25, 2)
+
+        # Sample positions in world frame
+        scan_pos_w = root_pos_w[:, :2].unsqueeze(1) + grid_flat.unsqueeze(0)  # (N, 25, 2)
+
+        # Query terrain height — for flat ground: 0.0
+        ground_z = torch.zeros(N, 25, device=self.device)
+        scan_heights = ground_z - root_pos_w[:, 2:3]  # height relative to robot z (N, 25)
+        return scan_heights
 
     def _get_rewards(self) -> torch.Tensor:
         with torch.no_grad():
@@ -203,38 +255,42 @@ class OrixAmpEnv(DirectRLEnv):
         return terminated, time_out
 
     def collect_reference_motions(self, num_samples: int) -> torch.Tensor:
-        """Sample AMP obs from motion reference data — called by skrl AMP runner.
+        """Sample AMP obs from motion reference data (40D, matches env amp_obs).
 
-        Must return tensors in exactly the same format as the env's amp_obs
-        (43-dim: joint_pos + joint_vel + root_pos + root_quat + key_body_pos).
+        Format: joint_pos(12) + joint_vel(12) + base_height(1) + projected_gravity(3) + key_body_pos(12)
         """
         times = np.random.uniform(0, self._motion_loader.duration, num_samples)
         dof_pos, dof_vel, body_pos, body_rot, _, _ = self._motion_loader.sample(
             num_samples=num_samples, times=times
         )
 
-        ref_joint_pos = dof_pos[:, self.motion_dof_indexes]           # (N, 12)
-        ref_joint_vel = dof_vel[:, self.motion_dof_indexes]           # (N, 12)
-        ref_root_pos = body_pos[:, self.motion_ref_body_index]        # (N, 3)
-        ref_root_quat = body_rot[:, self.motion_ref_body_index]       # (N, 4)
+        ref_joint_pos  = dof_pos[:, self.motion_dof_indexes]           # (N, 12)
+        ref_joint_vel  = dof_vel[:, self.motion_dof_indexes]           # (N, 12)
+        ref_root_pos   = body_pos[:, self.motion_ref_body_index]       # (N, 3)
+        ref_root_quat  = body_rot[:, self.motion_ref_body_index]       # (N, 4) wxyz
+
+        # base_height: z coordinate of root
+        base_height = ref_root_pos[:, 2:3]                             # (N, 1)
+
+        # projected_gravity from reference quaternion
+        gravity_w = torch.tensor([0.0, 0.0, -1.0], device=self.device).expand(num_samples, 3)
+        projected_gravity = _quat_rotate_inverse(ref_root_quat, gravity_w)  # (N, 3)
 
         if self.motion_key_body_indexes:
-            # Root-relative: subtract root pos from each key body — matches env AMP obs
             ref_key_body_pos = (
-                body_pos[:, self.motion_key_body_indexes]                 # (N, 4, 3)
-                - ref_root_pos.unsqueeze(1)                               # (N, 1, 3)
-            )
-            ref_key_body_flat = ref_key_body_pos.reshape(num_samples, -1)  # (N, 12)
+                body_pos[:, self.motion_key_body_indexes]              # (N, 4, 3)
+                - ref_root_pos.unsqueeze(1)
+            ).reshape(num_samples, -1)                                 # (N, 12)
         else:
-            ref_key_body_flat = torch.zeros(num_samples, 12, device=self.device)
+            ref_key_body_pos = torch.zeros(num_samples, 12, device=self.device)
 
         return torch.cat([
             ref_joint_pos,      # 12
             ref_joint_vel,      # 12
-            ref_root_pos,       # 3
-            ref_root_quat,      # 4
-            ref_key_body_flat,  # 12
-        ], dim=-1)  # 43 — matches amp_observation_space
+            base_height,        #  1
+            projected_gravity,  #  3
+            ref_key_body_pos,   # 12
+        ], dim=-1)  # 40 — matches amp_observation_space
 
     def _reset_idx(self, env_ids: torch.Tensor):
         # Guard: Isaac Lab may pass None for a full-env reset
