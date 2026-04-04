@@ -103,11 +103,18 @@ def main():
             "reward_scale": 2.0,
         },
 
-        # AMP motion data
-        "amp_data_path": motion_data_dir,
-        # Names match .npy files produced by motions/convert_to_amp_rsl_rl.py
-        "dataset_names": ["orix_amp_trot1", "orix_amp_trot2", "orix_amp_hop1", "orix_amp_hop2"],
-        "dataset_weights": [1.0, 1.0, 0.5, 0.5],  # trot weighted more
+        # AMP motion data — gbionics AMPOnPolicyRunner reads train_cfg["dataset"]
+        # as a {name: weight} dict. Names are .npy stems in motion_data_dir
+        # (produced by motions/convert_to_amp_rsl_rl.py from raw A1 .txt files).
+        "dataset": {
+            "motion_dir": motion_data_dir,
+            "motions": {
+                "orix_amp_trot1": 1.0,
+                "orix_amp_trot2": 1.0,
+                "orix_amp_hop1":  0.5,
+                "orix_amp_hop2":  0.5,
+            },
+        },
         "slow_down_factor": 1,
     }
 

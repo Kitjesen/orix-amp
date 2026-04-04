@@ -200,9 +200,45 @@ class OrixAmpEnv(DirectRLEnv):
 
         return terminated, time_out
 
+    def collect_reference_motions(self, num_samples: int) -> torch.Tensor:
+        """Sample AMP obs from motion reference data — called by skrl AMP runner.
+
+        Must return tensors in exactly the same format as the env's amp_obs
+        (43-dim: joint_pos + joint_vel + root_pos + root_quat + key_body_pos).
+        """
+        times = np.random.uniform(0, self._motion_loader.duration, num_samples)
+        dof_pos, dof_vel, body_pos, body_rot, _, _ = self._motion_loader.sample(
+            num_samples=num_samples, times=times
+        )
+
+        ref_joint_pos = dof_pos[:, self.motion_dof_indexes]           # (N, 12)
+        ref_joint_vel = dof_vel[:, self.motion_dof_indexes]           # (N, 12)
+        ref_root_pos = body_pos[:, self.motion_ref_body_index]        # (N, 3)
+        ref_root_quat = body_rot[:, self.motion_ref_body_index]       # (N, 4)
+
+        if self.motion_key_body_indexes:
+            ref_key_body_pos = body_pos[:, self.motion_key_body_indexes]  # (N, 4, 3)
+            ref_key_body_flat = ref_key_body_pos.reshape(num_samples, -1)  # (N, 12)
+        else:
+            ref_key_body_flat = torch.zeros(num_samples, 12, device=self.device)
+
+        return torch.cat([
+            ref_joint_pos,      # 12
+            ref_joint_vel,      # 12
+            ref_root_pos,       # 3
+            ref_root_quat,      # 4
+            ref_key_body_flat,  # 12
+        ], dim=-1)  # 43 — matches amp_observation_space
+
     def _reset_idx(self, env_ids: torch.Tensor):
-        super()._reset_idx(env_ids)
+        # Guard: Isaac Lab may pass None for a full-env reset
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+
+        # robot.reset() clears internal data buffers first, then super() resets
+        # episode counters — matches robot_lab convention
         self.robot.reset(env_ids)
+        super()._reset_idx(env_ids)
 
         if self.cfg.reset_strategy == "random-start":
             # Reset to a random time in the motion to improve exploration
