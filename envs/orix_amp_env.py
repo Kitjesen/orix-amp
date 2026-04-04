@@ -35,11 +35,9 @@ class OrixAmpEnv(DirectRLEnv):
     def __init__(self, cfg: OrixAmpEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        # Action offset and scale
-        dof_lower = self.robot.data.soft_joint_pos_limits[0, :, 0]
-        dof_upper = self.robot.data.soft_joint_pos_limits[0, :, 1]
-        self.action_offset = 0.5 * (dof_upper + dof_lower)
-        self.action_scale = dof_upper - dof_lower
+        # Action offset (default standing pose) and fixed scale
+        self.action_offset = self.robot.data.default_joint_pos[0].clone()
+        self.action_scale = 0.5  # radians — policy outputs residuals around default pose
 
         # Load motion reference
         self._motion_loader = QuadMotionLoader(
@@ -107,19 +105,22 @@ class OrixAmpEnv(DirectRLEnv):
             - self.scene.env_origins.unsqueeze(1)
         )
 
-        obs = torch.cat([
+        # AMP obs: no progress — must match features extractable from motion reference data
+        amp_obs = torch.cat([
             self.robot.data.joint_pos,                                    # 12
             self.robot.data.joint_vel,                                    # 12
             root_pos_rel,                                                 # 3
             self.robot.data.body_quat_w[:, self.ref_body_index],         # 4
             key_body_pos_rel.reshape(self.num_envs, -1),                 # 4*3=12
-            progress,                                                     # 1
-        ], dim=-1)  # total = 44
+        ], dim=-1)  # total = 43
+
+        # Policy obs: AMP obs + progress for episode conditioning
+        obs = torch.cat([amp_obs, progress], dim=-1)  # 44
 
         # Update AMP observation history
         for i in reversed(range(self.cfg.num_amp_observations - 1)):
             self.amp_observation_buffer[:, i + 1] = self.amp_observation_buffer[:, i]
-        self.amp_observation_buffer[:, 0] = obs.clone()
+        self.amp_observation_buffer[:, 0] = amp_obs
         self.extras = {"amp_obs": self.amp_observation_buffer.view(-1, self.amp_observation_size)}
 
         return {"policy": obs}
@@ -154,19 +155,37 @@ class OrixAmpEnv(DirectRLEnv):
         pos_err = torch.square(root_pos_rel - ref_root_pos).sum(dim=-1)
         rew_pos = self.cfg.rew_imitation_pos * torch.exp(-pos_err / self.cfg.imitation_sigma_pos)
 
-        # 4. Root rotation imitation
+        # 4. Root rotation imitation — use 1 - |dot(q, q_ref)|^2 to handle q == -q symmetry
         root_quat = self.robot.data.body_quat_w[:, self.ref_body_index]
-        rot_err = torch.square(root_quat - ref_root_quat).sum(dim=-1)
+        quat_dot = (root_quat * ref_root_quat).sum(dim=-1)
+        rot_err = 1.0 - torch.square(quat_dot)
         rew_rot = self.cfg.rew_imitation_rot * torch.exp(-rot_err / self.cfg.imitation_sigma_rot)
 
         # 5. Regularization
         rew_action = self.cfg.rew_action_l2 * torch.square(self.actions).sum(dim=-1)
-        rew_joint_acc = self.cfg.rew_joint_acc_l2 * torch.square(
-            self.robot.data.joint_acc[:self.cfg.action_space] if hasattr(self.robot.data, 'joint_acc')
-            else torch.zeros(self.num_envs, device=self.device)
-        ).sum(dim=-1) if hasattr(self.robot.data, 'joint_acc') else torch.zeros(self.num_envs, device=self.device)
+        rew_joint_vel_l2 = self.cfg.rew_joint_vel_l2 * torch.square(self.robot.data.joint_vel).sum(dim=-1)
 
-        total = rew_joint_pos + rew_joint_vel + rew_pos + rew_rot + rew_action
+        if hasattr(self.robot.data, 'joint_acc'):
+            rew_joint_acc = self.cfg.rew_joint_acc_l2 * torch.square(
+                self.robot.data.joint_acc[:, :self.cfg.action_space]
+            ).sum(dim=-1)
+        else:
+            rew_joint_acc = torch.zeros(self.num_envs, device=self.device)
+
+        # 6. Joint position limit penalty
+        joint_pos = self.robot.data.joint_pos
+        lower = self.robot.data.soft_joint_pos_limits[0, :, 0]
+        upper = self.robot.data.soft_joint_pos_limits[0, :, 1]
+        out_of_range = ((joint_pos < lower) | (joint_pos > upper)).float().sum(dim=-1)
+        rew_joint_limits = self.cfg.rew_joint_pos_limits * out_of_range
+
+        # 7. Termination penalty
+        base_height = self.robot.data.body_pos_w[:, self.ref_body_index, 2]
+        rew_termination = self.cfg.rew_termination * (base_height < self.cfg.termination_height).float()
+
+        total = (rew_joint_pos + rew_joint_vel + rew_pos + rew_rot
+                 + rew_action + rew_joint_vel_l2 + rew_joint_acc
+                 + rew_joint_limits + rew_termination)
 
         return total
 
@@ -185,8 +204,8 @@ class OrixAmpEnv(DirectRLEnv):
         self.robot.reset(env_ids)
 
         if self.cfg.reset_strategy == "random-start":
-            # Reset to motion start with slight randomization
-            times = np.zeros(len(env_ids))
+            # Reset to a random time in the motion to improve exploration
+            times = np.random.uniform(0, self._motion_loader.duration, len(env_ids))
             (dof_pos, dof_vel, body_pos, body_rot, _, _) = self._motion_loader.sample(
                 num_samples=len(env_ids), times=times
             )

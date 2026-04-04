@@ -26,7 +26,7 @@ ORIX_DOG_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
         merge_fixed_joints=True,
-        asset_path=os.path.join(os.path.dirname(__file__), "..", "..", "urdf", "orix_dog.urdf"),
+        asset_path=os.path.join(os.path.dirname(__file__), "..", "urdf", "orix_dog.urdf"),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -100,12 +100,13 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     dt = 1 / 120          # physics dt
 
     # ── Spaces ──
-    # obs: joint_pos(12) + joint_vel(12) + root_pos(3) + root_quat(4) + key_body_pos(4*3) + progress(1)
+    # policy obs: joint_pos(12) + joint_vel(12) + root_pos(3) + root_quat(4) + key_body_pos(4*3) + progress(1)
     observation_space = 12 + 12 + 3 + 4 + 4 * 3 + 1  # = 44
     action_space = 12     # 12 DOF leg joints
     state_space = 0
     num_amp_observations = 3
-    amp_observation_space = 44
+    # AMP obs excludes progress (not present in motion reference data): 12+12+3+4+12 = 43
+    amp_observation_space = 43
 
     early_termination = True
     termination_height = 0.15  # lower than G1 since orix is small

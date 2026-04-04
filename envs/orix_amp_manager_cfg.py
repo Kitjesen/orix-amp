@@ -13,6 +13,8 @@ amp-rsl-rl AMPOnPolicyRunner expects:
 
 from __future__ import annotations
 
+import os
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg
 from isaaclab.assets import ArticulationCfg
@@ -35,7 +37,7 @@ ORIX_DOG_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
         merge_fixed_joints=True,
-        asset_path="/home/bsrl/hongsenpang/RLbased/robot_lab/source/robot_lab/robot_lab/data/Robots/orix_dog/urdf/orix_dog.urdf",
+        asset_path=os.path.join(os.path.dirname(__file__), "..", "urdf", "orix_dog.urdf"),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -69,8 +71,8 @@ ORIX_DOG_CFG = ArticulationCfg(
             effort_limit=18.0,
             saturation_effort=18.0,
             velocity_limit=35.0,
-            stiffness=12.5,
-            damping=0.3,
+            stiffness=25.0,
+            damping=0.5,
             friction=0.0,
         ),
     },
