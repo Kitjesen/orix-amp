@@ -84,6 +84,7 @@ def main() -> None:
         amp_replay_buffer_size = 1_000_000,
         amp_expert_preload   = 200_000,
         amp_batch_size       = 512,
+        num_disc_updates     = 5,
         disc_grad_penalty    = 10.0,
         disc_reward_scale    = 2.0,
         disc_learning_rate   = 1e-4,

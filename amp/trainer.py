@@ -43,6 +43,7 @@ class AMPConfig:
     amp_replay_buffer_size: int  = 1_000_000
     amp_expert_preload:    int   = 200_000  # expert transitions to pre-fill
     amp_batch_size:        int   = 512
+    num_disc_updates:      int   = 5       # discriminator gradient steps per iteration (match PPO epochs)
     disc_grad_penalty:     float = 10.0
     disc_reward_scale:     float = 2.0
     disc_learning_rate:    float = 1e-4
@@ -171,15 +172,15 @@ class AMPTrainer:
 
             obs_dict, task_rew, terminated, truncated, extras = self.env.step(actions)
             amp_obs = extras["amp_obs"]                        # (N, 129)
-            dones   = terminated | truncated
 
-            # Discriminator style reward (no grad, disc.eval() not needed since no_grad in method)
+            # Discriminator style reward
             style_rew = self.discriminator.compute_style_reward(amp_obs, self.cfg.disc_reward_scale)
 
-            # Blend
+            # Blend task + style reward
             total_rew = self._blend_reward(task_rew, style_rew)
 
-            rollout.add(step, obs, actions, log_probs, total_rew, values, dones, amp_obs)
+            # NOTE: pass terminated only — truncation (time limit) keeps bootstrap value in GAE
+            rollout.add(step, obs, actions, log_probs, total_rew, values, terminated, amp_obs)
             self.agent_buffer.add(amp_obs)
 
             obs = obs_dict["policy"]
@@ -267,22 +268,27 @@ class AMPTrainer:
 
     # ── Discriminator update ──────────────────────────────────────────────────
 
-    def _update_discriminator(self, agent_amp_obs: Tensor) -> dict[str, float]:
-        """One discriminator update step using agent buffer + expert buffer."""
+    def _update_discriminator(self) -> dict[str, float]:
+        """Multiple discriminator gradient steps per iteration.
+
+        num_disc_updates steps to keep pace with PPO's num_learning_epochs updates.
+        Returns stats from the final update step.
+        """
         B = self.cfg.amp_batch_size
-
-        expert_obs = self.expert_buffer.sample(B)
-        agent_obs  = self.agent_buffer.sample(B)
-
         self.discriminator.train()
-        self.optimizer_disc.zero_grad()
+        info: dict[str, float] = {}
 
-        loss, info = self.discriminator.compute_loss(
-            expert_obs, agent_obs, self.cfg.disc_grad_penalty
-        )
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.discriminator.parameters(), self.cfg.max_grad_norm)
-        self.optimizer_disc.step()
+        for _ in range(self.cfg.num_disc_updates):
+            expert_obs = self.expert_buffer.sample(B)
+            agent_obs  = self.agent_buffer.sample(B)
+
+            self.optimizer_disc.zero_grad()
+            loss, info = self.discriminator.compute_loss(
+                expert_obs, agent_obs, self.cfg.disc_grad_penalty
+            )
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.discriminator.parameters(), self.cfg.max_grad_norm)
+            self.optimizer_disc.step()
 
         return info
 
@@ -307,8 +313,7 @@ class AMPTrainer:
             ppo_stats = self._update_ppo(rollout)
 
             # 3. Update discriminator
-            agent_flat = rollout.amp_obs.view(-1, self.amp_obs_dim)
-            disc_stats = self._update_discriminator(agent_flat)
+            disc_stats = self._update_discriminator()
 
             self.it = it + 1
 

@@ -33,13 +33,15 @@ class RolloutBuffer:
         self.num_steps = num_steps
         self.device    = device
 
-        self.obs       = torch.zeros(num_steps, num_envs, obs_dim,        device=device)
-        self.actions   = torch.zeros(num_steps, num_envs, action_dim,     device=device)
-        self.log_probs = torch.zeros(num_steps, num_envs,                 device=device)
-        self.rewards   = torch.zeros(num_steps, num_envs,                 device=device)
-        self.values    = torch.zeros(num_steps, num_envs,                 device=device)
-        self.dones     = torch.zeros(num_steps, num_envs,                 device=device)
-        self.amp_obs   = torch.zeros(num_steps, num_envs, amp_obs_dim,    device=device)
+        self.obs          = torch.zeros(num_steps, num_envs, obs_dim,     device=device)
+        self.actions      = torch.zeros(num_steps, num_envs, action_dim,  device=device)
+        self.log_probs    = torch.zeros(num_steps, num_envs,              device=device)
+        self.rewards      = torch.zeros(num_steps, num_envs,              device=device)
+        self.values       = torch.zeros(num_steps, num_envs,              device=device)
+        # terminations: True only on real episode end (fall / early termination).
+        # truncations (time limit) do NOT count — we still bootstrap V(next) for those.
+        self.terminations = torch.zeros(num_steps, num_envs,              device=device)
+        self.amp_obs      = torch.zeros(num_steps, num_envs, amp_obs_dim, device=device)
 
         # Computed by compute_returns()
         self.advantages: Tensor | None = None
@@ -53,16 +55,16 @@ class RolloutBuffer:
         log_probs: Tensor,
         rewards: Tensor,
         values: Tensor,
-        dones: Tensor,
+        terminated: Tensor,   # True = real episode end (e.g. fall); NOT time-limit
         amp_obs: Tensor,
     ) -> None:
-        self.obs[step]       = obs
-        self.actions[step]   = actions
-        self.log_probs[step] = log_probs
-        self.rewards[step]   = rewards
-        self.values[step]    = values
-        self.dones[step]     = dones.float()
-        self.amp_obs[step]   = amp_obs
+        self.obs[step]          = obs
+        self.actions[step]      = actions
+        self.log_probs[step]    = log_probs
+        self.rewards[step]      = rewards
+        self.values[step]       = values
+        self.terminations[step] = terminated.float()
+        self.amp_obs[step]      = amp_obs
 
     def compute_returns(
         self,
@@ -72,19 +74,22 @@ class RolloutBuffer:
     ) -> None:
         """GAE-Lambda advantage estimation.
 
-        delta_t   = r_t + gamma * V(s_{t+1}) * (1 - done_t) - V(s_t)
-        A_t       = delta_t + gamma * lam * (1 - done_t) * A_{t+1}
+        Uses terminations (not time-limit truncations) to mask next-state value.
+        This correctly handles episode timeout: we still bootstrap V(s_{T+1}).
+
+        delta_t   = r_t + gamma * V(s_{t+1}) * (1 - terminated_t) - V(s_t)
+        A_t       = delta_t + gamma * lam * (1 - terminated_t) * A_{t+1}
         returns_t = A_t + V(s_t)
         """
-        adv   = torch.zeros_like(self.rewards)
-        gae   = torch.zeros(self.num_envs, device=self.device)
+        adv = torch.zeros_like(self.rewards)
+        gae = torch.zeros(self.num_envs, device=self.device)
 
         for t in reversed(range(self.num_steps)):
-            next_nterm = 1.0 - self.dones[t]
-            next_val   = last_values if t == self.num_steps - 1 else self.values[t + 1]
+            not_term = 1.0 - self.terminations[t]
+            next_val = last_values if t == self.num_steps - 1 else self.values[t + 1]
 
-            delta = self.rewards[t] + gamma * next_val * next_nterm - self.values[t]
-            gae   = delta + gamma * lam * next_nterm * gae
+            delta  = self.rewards[t] + gamma * next_val * not_term - self.values[t]
+            gae    = delta + gamma * lam * not_term * gae
             adv[t] = gae
 
         self.advantages = adv
@@ -96,15 +101,14 @@ class RolloutBuffer:
         """Flatten, shuffle, and yield minibatches.
 
         Yields dicts with keys:
-            obs, actions, log_probs_old, returns, advantages, amp_obs
+            obs, actions, log_probs_old, values_old, returns, advantages, amp_obs
         """
         assert self.advantages is not None, "Call compute_returns() first"
 
-        total = self.num_steps * self.num_envs
-        idx   = torch.randperm(total, device=self.device)
+        total      = self.num_steps * self.num_envs
+        idx        = torch.randperm(total, device=self.device)
         batch_size = total // num_mini_batches
 
-        # Flatten time × env → total
         flat = {
             "obs":           self.obs.view(total, -1),
             "actions":       self.actions.view(total, -1),
@@ -144,15 +148,14 @@ class AMPReplayBuffer:
 
     def add(self, amp_obs: Tensor) -> None:
         """Add a batch of AMP observations.  amp_obs: (B, amp_obs_dim)"""
-        B = amp_obs.shape[0]
+        B   = amp_obs.shape[0]
         end = self.ptr + B
         if end <= self.capacity:
             self.data[self.ptr : end] = amp_obs
         else:
-            # Wrap around
             first = self.capacity - self.ptr
-            self.data[self.ptr :] = amp_obs[:first]
-            self.data[: B - first] = amp_obs[first:]
+            self.data[self.ptr :]    = amp_obs[:first]
+            self.data[: B - first]   = amp_obs[first:]
         self.ptr  = end % self.capacity
         self.size = min(self.size + B, self.capacity)
 
