@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 
 from isaaclab.assets import ArticulationCfg
+from isaaclab.actuators import DCMotorCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
@@ -60,7 +61,7 @@ ORIX_DOG_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "legs": sim_utils.DCMotorCfg(
+        "legs": DCMotorCfg(
             joint_names_expr=[".*"],
             effort_limit=18.0,
             saturation_effort=18.0,

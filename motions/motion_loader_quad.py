@@ -11,6 +11,36 @@ import numpy as np
 import torch
 
 
+def _slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    """Spherical linear interpolation for batched quaternions.
+
+    Args:
+        q0: Start quaternions (..., 4)
+        q1: End quaternions (..., 4)
+        t:  Blend weight (..., 1) broadcastable to q0/q1 shape
+
+    Returns:
+        Interpolated unit quaternions (..., 4)
+    """
+    # Handle double-cover: q and -q represent the same rotation;
+    # pick the sign that gives the shortest arc.
+    dot = (q0 * q1).sum(dim=-1, keepdim=True)  # (..., 1)
+    q1 = torch.where(dot < 0.0, -q1, q1)
+    dot = dot.abs().clamp(0.0, 1.0)
+
+    theta = torch.acos(dot)          # (..., 1)
+    sin_theta = torch.sin(theta)     # (..., 1)
+    near_zero = sin_theta.abs() < 1e-6
+
+    # SLERP weights; fall back to lerp when quaternions are nearly identical
+    w0 = torch.where(near_zero, 1.0 - t, torch.sin((1.0 - t) * theta) / sin_theta)
+    w1 = torch.where(near_zero, t,        torch.sin(t * theta) / sin_theta)
+
+    result = w0 * q0 + w1 * q1
+    # Re-normalise to guard against floating-point drift
+    return result / result.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+
 class QuadMotionLoader:
     """Load and sample quadruped motion reference data."""
 
@@ -32,7 +62,8 @@ class QuadMotionLoader:
         self.dt = 1.0 / float(data["fps"])
         self.num_frames = self.dof_positions.shape[0]
         self.duration = self.dt * (self.num_frames - 1)
-        print(f"Motion loaded ({os.path.basename(motion_file)}): {self.duration:.1f}s, {self.num_frames} frames, {len(self._dof_names)} DOFs")
+        print(f"Motion loaded ({os.path.basename(motion_file)}): {self.duration:.1f}s, "
+              f"{self.num_frames} frames, {len(self._dof_names)} DOFs")
 
     @property
     def dof_names(self) -> list[str]:
@@ -60,7 +91,8 @@ class QuadMotionLoader:
             if name in self._body_names:
                 indices.append(self._body_names.index(name))
             else:
-                indices.append(0)  # fallback to first body
+                print(f"[WARN] Body '{name}' not in motion data, using index 0")
+                indices.append(0)
         return indices
 
     def sample(
@@ -70,7 +102,7 @@ class QuadMotionLoader:
 
         Args:
             num_samples: Number of samples (= num_envs).
-            times: Array of times in seconds.
+            times: Array of times in seconds, shape (num_samples,).
 
         Returns:
             Tuple of (dof_pos, dof_vel, body_pos, body_rot, body_lin_vel, body_ang_vel)
@@ -83,22 +115,31 @@ class QuadMotionLoader:
         frame_low = np.clip(np.floor(frame_float).astype(int), 0, self.num_frames - 2)
         frame_high = frame_low + 1
         blend = torch.tensor(frame_float - frame_low, dtype=torch.float32, device=self.device)
-        blend = blend.unsqueeze(-1)  # (N, 1) for broadcasting
+        blend_1d = blend.unsqueeze(-1)        # (N, 1)  — for scalar/vector lerp
 
-        # Linear interpolation
         def lerp(data: torch.Tensor, dim_extra: int = 0) -> torch.Tensor:
+            """Linear interpolation with optional extra broadcast dims."""
             low = data[frame_low]
             high = data[frame_high]
-            b = blend
+            b = blend_1d
             for _ in range(dim_extra):
                 b = b.unsqueeze(-1)
             return low + b * (high - low)
 
+        # For body rotations use SLERP so intermediate quats stay on the unit sphere
+        # blend shape for (N, num_bodies, 4): (N, 1, 1)
+        blend_3d = blend_1d.unsqueeze(-1)     # (N, 1, 1)
+        body_rot_interp = _slerp(
+            self.body_rotations[frame_low],   # (N, num_bodies, 4)
+            self.body_rotations[frame_high],  # (N, num_bodies, 4)
+            blend_3d,                         # (N, 1, 1)
+        )
+
         return (
-            lerp(self.dof_positions),           # (N, num_dofs)
-            lerp(self.dof_velocities),           # (N, num_dofs)
-            lerp(self.body_positions, 1),        # (N, num_bodies, 3)
-            lerp(self.body_rotations, 1),        # (N, num_bodies, 4) — note: should slerp for quats
+            lerp(self.dof_positions),            # (N, num_dofs)
+            lerp(self.dof_velocities),            # (N, num_dofs)
+            lerp(self.body_positions, 1),         # (N, num_bodies, 3)
+            body_rot_interp,                      # (N, num_bodies, 4) — SLERP
             lerp(self.body_linear_velocities, 1),
             lerp(self.body_angular_velocities, 1),
         )

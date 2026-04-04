@@ -43,13 +43,25 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 class OrixAmpVecEnvWrapper(RslRlVecEnvWrapper):
     """Wrapper adding AMP obs + TienKung-compatible get_observations."""
 
+    # Leg joint names in Isaac order — used to index robot data by name, not position
+    _LEG_JOINTS = [
+        "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+        "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+        "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+        "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+    ]
+
     def __init__(self, env):
         super().__init__(env)
         robot = self.unwrapped.scene["robot"]
-        self._amp_foot_ids = []
-        for name in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]:
-            self._amp_foot_ids.append(robot.data.body_names.index(name))
+
+        # Cache foot body indices
+        self._amp_foot_ids = [robot.data.body_names.index(n)
+                              for n in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]]
         print(f"[OrixAMP] foot_ids={self._amp_foot_ids}")
+
+        # Cache leg joint indices (robust to extra DOFs like foot_joints)
+        self._leg_joint_ids = [robot.data.joint_names.index(n) for n in self._LEG_JOINTS]
 
     @property
     def step_dt(self):
@@ -105,8 +117,9 @@ class OrixAmpVecEnvWrapper(RslRlVecEnvWrapper):
     def get_amp_obs_for_expert_trans(self):
         """AMP obs: joint_pos(12) + joint_vel(12) + foot_pos_local(12) = 36D."""
         robot = self.unwrapped.scene["robot"]
-        joint_pos = robot.data.joint_pos[:, :12]
-        joint_vel = robot.data.joint_vel[:, :12]
+        # Index by cached joint ids — safe even when foot_joints add extra DOFs
+        joint_pos = robot.data.joint_pos[:, self._leg_joint_ids]
+        joint_vel = robot.data.joint_vel[:, self._leg_joint_ids]
         foot_pos_w = robot.data.body_pos_w[:, self._amp_foot_ids]
         root_pos = robot.data.root_pos_w.unsqueeze(1)
         root_quat_conj = quat_conjugate(robot.data.root_quat_w)
