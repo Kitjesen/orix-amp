@@ -1,27 +1,26 @@
 # Copyright (c) 2026 Inovxio
 # SPDX-License-Identifier: Apache-2.0
-"""Orix Dog AMP environment config — based on robot_lab g1_amp pattern.
+"""Orix Dog AMP environment config.
 
-Adapted from G1AmpDanceEnvCfg for a 12-DOF quadruped (orix_dog).
-Uses Isaac Lab DirectRLEnv + skrl AMP algorithm.
+Obs spaces:
+  Actor  (41D): joint_pos(12)+joint_vel(12)+base_height(1)+proj_gravity(3)+key_body_pos(12)+progress(1)
+  Critic (73D): actor(41)+base_lin_vel(3)+feet_contact(4)+height_scan(25)
+  AMP    (40D): same as actor minus progress — all realizable on real robot
 """
-
 from __future__ import annotations
-
 import os
 
 from isaaclab.assets import ArticulationCfg
 from isaaclab.actuators import DCMotorCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
 
-
 MOTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "motions")
 
-# ── Orix Dog Robot Config ──
 ORIX_DOG_CFG = ArticulationCfg(
     prim_path="/World/envs/env_.*/Robot",
     spawn=sim_utils.UrdfFileCfg(
@@ -44,20 +43,12 @@ ORIX_DOG_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.35),  # slightly above standing height
+        pos=(0.0, 0.0, 0.35),
         joint_pos={
-            "FR_hip_joint": 0.0,
-            "FR_thigh_joint": -0.65,
-            "FR_calf_joint": 1.5,
-            "FL_hip_joint": 0.0,
-            "FL_thigh_joint": 0.65,
-            "FL_calf_joint": -1.5,
-            "RR_hip_joint": 0.0,
-            "RR_thigh_joint": -0.65,
-            "RR_calf_joint": 1.5,
-            "RL_hip_joint": 0.0,
-            "RL_thigh_joint": 0.65,
-            "RL_calf_joint": -1.5,
+            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.65, "FR_calf_joint":  1.5,
+            "FL_hip_joint": 0.0, "FL_thigh_joint":  0.65, "FL_calf_joint": -1.5,
+            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.65, "RR_calf_joint":  1.5,
+            "RL_hip_joint": 0.0, "RL_thigh_joint":  0.65, "RL_calf_joint": -1.5,
         },
         joint_vel={".*": 0.0},
     ),
@@ -80,51 +71,75 @@ ORIX_DOG_CFG = ArticulationCfg(
 class OrixAmpEnvCfg(DirectRLEnvCfg):
     """Orix Dog AMP environment config."""
 
-    # ── Reward weights ──
-    # Basic reward
-    rew_termination = -10.0
-    rew_action_l2 = -0.01
-    rew_joint_pos_limits = -10.0
-    rew_joint_acc_l2 = -1.0e-06
-    rew_joint_vel_l2 = -0.001
-    # Imitation reward
-    rew_imitation_pos = 1.0
-    rew_imitation_rot = 0.5
-    rew_imitation_joint_pos = 2.5
-    rew_imitation_joint_vel = 1.0
-    imitation_sigma_pos = 1.2
-    imitation_sigma_rot = 0.5
-    imitation_sigma_joint_pos = 1.5
-    imitation_sigma_joint_vel = 8.0
+    # ── Obs / action spaces ───────────────────────────────────────────────────
+    # actor: joint_pos(12)+joint_vel(12)+height(1)+proj_grav(3)+key_body(12)+cmd(3)+progress(1) = 44
+    # critic: actor(44)+base_lin_vel(3)+feet_contact(4)+height_scan(25) = 76
+    # AMP: actor minus cmd(3) minus progress(1) = 40
+    observation_space = 44
+    action_space      = 12
+    state_space       = 76
+    num_amp_observations  = 3
+    amp_observation_space = 40
 
-    # ── Env ──
-    episode_length_s = 5.0
-    decimation = 4        # physics substeps per policy step
-    dt = 1 / 120          # physics dt
+    # ── Env timing ────────────────────────────────────────────────────────────
+    episode_length_s = 10.0
+    decimation       = 4       # policy step = 4 physics steps
+    dt               = 1 / 120
 
-    # ── Spaces ──
-    # AMP obs (realizable on real robot):
-    #   joint_pos(12) + joint_vel(12) + base_height(1) + projected_gravity(3) + key_body_pos(12) = 40
-    # Actor obs = AMP obs + progress(1) = 41
-    # Critic obs (privileged, sim only):
-    #   actor(41) + base_lin_vel(3) + feet_contact(4) + height_scan(25) = 73
-    observation_space = 12 + 12 + 1 + 3 + 4 * 3 + 1   # actor = 41
-    action_space = 12
-    state_space = 41 + 3 + 4 + 25                      # critic = 73
-    num_amp_observations = 3
-    amp_observation_space = 12 + 12 + 1 + 3 + 4 * 3   # AMP = 40
-    # Height scanner: 5×5 grid, 0.2m spacing → 25 scan points
-    height_scan_size: tuple = (1.0, 1.0)   # metres (full extent)
-    height_scan_resolution: float = 0.25   # metres per sample → 5×5 = 25 pts
-
+    # ── Termination ───────────────────────────────────────────────────────────
     early_termination = True
-    termination_height = 0.15  # lower than G1 since orix is small
+    termination_height = 0.15  # base z below this → episode end
 
-    motion_file = os.path.join(MOTIONS_DIR, "orix_trot_medium_30.npz")
+    # ── Velocity command ranges ───────────────────────────────────────────────
+    cmd_lin_vel_x_range: tuple = (-1.0, 1.0)   # m/s
+    cmd_lin_vel_y_range: tuple = (-0.5, 0.5)
+    cmd_ang_vel_z_range: tuple = (-1.0, 1.0)   # rad/s
+
+    # ── Motion reference ──────────────────────────────────────────────────────
+    motion_file    = os.path.join(MOTIONS_DIR, "orix_trot_medium_30.npz")
     reference_body = "base_link"
     reset_strategy = "random-start"
 
-    # ── Simulation ──
+    # ── Reward weights ────────────────────────────────────────────────────────
+    # Velocity tracking (task)
+    rew_track_lin_vel_xy: float = 6.0
+    rew_track_ang_vel_z:  float = 3.0
+    track_vel_sigma:      float = 0.25
+
+    # Posture / stability
+    rew_upward:         float =  1.0
+    rew_lin_vel_z_l2:   float = -2.0     # penalise vertical base velocity
+    rew_ang_vel_xy_l2:  float = -0.05    # penalise roll/pitch rate
+
+    # Foot behaviour
+    rew_feet_air_time:          float =  0.3
+    feet_air_time_threshold:    float =  0.5   # sec
+    rew_feet_air_time_variance: float = -1.0
+    rew_feet_gait:              float =  0.5
+    rew_feet_slide:             float = -0.1
+    rew_feet_contact_no_cmd:    float =  0.1   # encourage standing when cmd=0
+
+    # Regularisation
+    rew_action_rate_l2:   float = -0.01
+    rew_joint_torques_l2: float = -2.5e-5
+    rew_joint_acc_l2:     float = -2.5e-7
+    rew_joint_pos_limits: float = -5.0
+    rew_stand_still:      float = -0.5
+
+    # Contact penalties
+    rew_undesired_contacts: float = -1.0
+    rew_contact_forces:     float = -1.5e-4
+
+    # Imitation (AMP task reward component)
+    rew_imitation_joint_pos: float = 1.0   # scaled down — velocity tracking is primary
+    rew_imitation_joint_vel: float = 0.3
+    imitation_sigma_joint_pos: float = 1.5
+    imitation_sigma_joint_vel: float = 8.0
+
+    # Termination penalty
+    rew_termination: float = -10.0
+
+    # ── Simulation ────────────────────────────────────────────────────────────
     sim: SimulationCfg = SimulationCfg(
         dt=dt,
         render_interval=decimation,
@@ -134,12 +149,19 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    # ── Scene ──
+    # ── Scene ─────────────────────────────────────────────────────────────────
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
-        env_spacing=2.0,
+        env_spacing=2.5,
         replicate_physics=True,
     )
 
-    # ── Robot ──
+    # ── Robot ─────────────────────────────────────────────────────────────────
     robot: ArticulationCfg = ORIX_DOG_CFG
+
+    # ── Contact sensor (all bodies, for feet contact detection) ───────────────
+    contact_sensor: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",
+        history_length=3,
+        track_air_time=True,
+    )
