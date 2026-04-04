@@ -58,7 +58,6 @@ ORIX_DOG_CFG = ArticulationCfg(
             "RL_hip_joint": 0.0,
             "RL_thigh_joint": 0.65,
             "RL_calf_joint": -1.5,
-            ".*_foot_joint": 0.0,
         },
         joint_vel={".*": 0.0},
     ),
