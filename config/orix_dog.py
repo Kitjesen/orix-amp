@@ -1,16 +1,18 @@
 """Configuration for Orix Dog quadruped robot."""
 
+import os
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
+_URDF_PATH = os.path.join(os.path.dirname(__file__), "..", "urdf", "orix_dog.urdf")
 
 ORIX_DOG_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
         merge_fixed_joints=True,
         replace_cylinders_with_capsules=False,
-        asset_path="urdf/orix_dog.urdf",
+        asset_path=_URDF_PATH,
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -31,15 +33,16 @@ ORIX_DOG_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.30),
+        pos=(0.0, 0.0, 0.32),
         joint_pos={
             ".*_hip_joint": 0.0,
-            # Left legs (FL, RL): thigh [-0.5, 1.0], calf [-1.7, 0.0]
-            ".*L_thigh_joint":  0.8,
-            ".*L_calf_joint":  -1.5,
-            # Right legs (FR, RR): axis mirrored in URDF, so opposite sign
-            ".*R_thigh_joint": -0.8,
-            ".*R_calf_joint":   1.5,
+            # Left legs (FL, RL): thigh limits [-0.5, 1.0], calf limits [-1.7, 0.0]
+            # Use 0.65 (not 0.8) to keep 0.35 rad margin from limits
+            ".*L_thigh_joint":  0.65,
+            ".*L_calf_joint":  -1.3,
+            # Right legs (FR, RR): URDF axis mirrored, so opposite sign
+            ".*R_thigh_joint": -0.65,
+            ".*R_calf_joint":   1.3,
         },
         joint_vel={".*": 0.0},
     ),

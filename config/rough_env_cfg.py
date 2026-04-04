@@ -69,7 +69,7 @@ class OrixDogRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.joint_torques_l2.weight = -2.5e-5
         self.rewards.joint_vel_l2.weight = 0
         self.rewards.joint_acc_l2.weight = -2.5e-7
-        self.rewards.joint_pos_limits.weight = -2.0
+        self.rewards.joint_pos_limits.weight = -5.0
         self.rewards.joint_vel_limits.weight = 0
         self.rewards.joint_power.weight = -2e-5
         self.rewards.stand_still.weight = -0.5
@@ -79,7 +79,7 @@ class OrixDogRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
             ["FR_(hip|thigh|calf).*", "RL_(hip|thigh|calf).*"],
             ["FL_(hip|thigh|calf).*", "RR_(hip|thigh|calf).*"],
         ]
-        self.rewards.action_rate_l2.weight = -0.01
+        self.rewards.action_rate_l2.weight = -0.5
         self.rewards.undesired_contacts.weight = -1.0
         self.rewards.undesired_contacts.params["sensor_cfg"].body_names = ["base_link"]
         self.rewards.contact_forces.weight = -1.5e-4
