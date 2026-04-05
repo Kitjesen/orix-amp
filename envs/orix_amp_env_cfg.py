@@ -82,13 +82,13 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     amp_observation_space = 40
 
     # ── Env timing ────────────────────────────────────────────────────────────
-    episode_length_s = 10.0
+    episode_length_s = 33.33   # 33.33s × 30Hz = 1000 steps
     decimation       = 4       # policy step = 4 physics steps
     dt               = 1 / 120
 
     # ── Termination ───────────────────────────────────────────────────────────
-    early_termination = True
-    termination_height = 0.15  # base z below this → episode end
+    early_termination  = True
+    termination_height = 0.12  # base z below this → episode end (lowered for recovery room)
 
     # ── Velocity command ranges ───────────────────────────────────────────────
     cmd_lin_vel_x_range: tuple = (-1.0, 1.0)   # m/s
