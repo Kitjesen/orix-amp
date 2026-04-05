@@ -139,19 +139,21 @@ class AMPTrainer:
     def _prefill_expert_buffer(self, total: int) -> None:
         """Fill expert buffer with reference motion samples.
 
-        collect_reference_motions() returns single-frame (B, 43) tensors.
-        We stack 3 independent random frames to match the env's 3-frame
-        stacked AMP obs format (B, 129).  This is the standard AMP approximation
-        when sequential data isn't pre-indexed.
+        Matches env's AMP obs format: if num_amp_observations=1, single frame (B, 40);
+        if >1, stack that many independent random frames.
         """
-        print(f"[AMP] Pre-filling expert buffer with {total} samples...")
+        num_frames = self.env.cfg.num_amp_observations
+        print(f"[AMP] Pre-filling expert buffer with {total} samples (num_frames={num_frames})...")
         batch = 4096
         filled = 0
         while filled < total:
             n = min(batch, total - filled)
-            frames = [self.env.collect_reference_motions(n) for _ in range(3)]
-            stacked = torch.cat(frames, dim=-1)   # (n, 129)
-            self.expert_buffer.add(stacked)
+            if num_frames == 1:
+                sample = self.env.collect_reference_motions(n)  # (n, 40)
+            else:
+                frames = [self.env.collect_reference_motions(n) for _ in range(num_frames)]
+                sample = torch.cat(frames, dim=-1)
+            self.expert_buffer.add(sample)
             filled += n
         print(f"[AMP] Expert buffer ready: {len(self.expert_buffer)} samples")
 
