@@ -45,20 +45,29 @@ ORIX_DOG_CFG = ArticulationCfg(
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.35),
         joint_pos={
-            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.65, "FR_calf_joint":  1.5,
-            "FL_hip_joint": 0.0, "FL_thigh_joint":  0.65, "FL_calf_joint": -1.5,
-            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.65, "RR_calf_joint":  1.5,
-            "RL_hip_joint": 0.0, "RL_thigh_joint":  0.65, "RL_calf_joint": -1.5,
+            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.65, "FR_calf_joint":  1.3,
+            "FL_hip_joint": 0.0, "FL_thigh_joint":  0.65, "FL_calf_joint": -1.3,
+            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.65, "RR_calf_joint":  1.3,
+            "RL_hip_joint": 0.0, "RL_thigh_joint":  0.65, "RL_calf_joint": -1.3,
         },
         joint_vel={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "legs": DCMotorCfg(
-            joint_names_expr=[".*"],
+        "hip_thigh": DCMotorCfg(
+            joint_names_expr=[".*_hip_joint", ".*_thigh_joint"],
             effort_limit=18.0,
             saturation_effort=18.0,
             velocity_limit=35.0,
+            stiffness=25.0,
+            damping=0.5,
+            friction=0.0,
+        ),
+        "calf": DCMotorCfg(
+            joint_names_expr=[".*_calf_joint"],
+            effort_limit=36.0,     # URDF: calf effort=36 (was wrongly 18)
+            saturation_effort=36.0,
+            velocity_limit=17.5,   # URDF: calf velocity=17.5 (was wrongly 35)
             stiffness=25.0,
             damping=0.5,
             friction=0.0,

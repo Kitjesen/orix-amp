@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GPU="${GPU:-4}"
 NUM_ENVS="${NUM_ENVS:-4096}"
 MAX_ITER="${MAX_ITER:-10000}"
-TASK_LERP="${TASK_LERP:-0.3}"
+TASK_LERP="${TASK_LERP:-1.0}"  # 1.0 = pure task reward, no AMP style
 
 echo "=== Orix AMP (self-contained) ==="
 echo "  GPU=$GPU  num_envs=$NUM_ENVS  max_iter=$MAX_ITER  task_lerp=$TASK_LERP"
