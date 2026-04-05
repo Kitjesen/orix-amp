@@ -343,10 +343,7 @@ class OrixAmpEnv(DirectRLEnv):
         self.last_actions.copy_(self.actions)
         self.last_joint_vel.copy_(self.robot.data.joint_vel)
 
-        # Scale by step_dt to match robot_lab RewardManager convention
-        # (each reward term is weight × dt × value, not weight × value)
-        dt = self.step_dt
-        total = dt * (
+        total = (
             rew_track_lin + rew_track_ang
             + rew_upward + rew_lin_vel_z + rew_ang_vel_xy
             + rew_air_time + rew_air_var + rew_gait + rew_slide
@@ -354,26 +351,27 @@ class OrixAmpEnv(DirectRLEnv):
             + rew_undesired + rew_cf
             + rew_action_rate + rew_torques + rew_joint_acc + rew_limits
             + rew_imit_jp + rew_imit_jv
-        ) + rew_term  # termination is not time-scaled
+            + rew_term
+        )
 
-        # Expose per-term breakdown for logging (dt-scaled to match robot_lab convention)
+        # Per-term breakdown for logging (per-step mean, matching robot_lab Episode_Reward format)
         self.extras["reward_terms"] = {
-            "track_lin_vel":  (dt * rew_track_lin).mean().item(),
-            "track_ang_vel":  (dt * rew_track_ang).mean().item(),
-            "upward":         (dt * rew_upward).mean().item(),
-            "lin_vel_z":      (dt * rew_lin_vel_z).mean().item(),
-            "ang_vel_xy":     (dt * rew_ang_vel_xy).mean().item(),
-            "feet_air_time":  (dt * rew_air_time).mean().item(),
-            "feet_air_var":   (dt * rew_air_var).mean().item(),
-            "feet_gait":      (dt * rew_gait).mean().item(),
-            "feet_slide":     (dt * rew_slide).mean().item(),
-            "stand_still":    (dt * rew_stand).mean().item(),
-            "action_rate":    (dt * rew_action_rate).mean().item(),
-            "joint_torques":  (dt * rew_torques).mean().item(),
-            "joint_acc":      (dt * rew_joint_acc).mean().item(),
-            "joint_limits":   (dt * rew_limits).mean().item(),
-            "imitation_jp":   (dt * rew_imit_jp).mean().item(),
-            "imitation_jv":   (dt * rew_imit_jv).mean().item(),
+            "track_lin_vel":  rew_track_lin.mean().item(),
+            "track_ang_vel":  rew_track_ang.mean().item(),
+            "upward":         rew_upward.mean().item(),
+            "lin_vel_z":      rew_lin_vel_z.mean().item(),
+            "ang_vel_xy":     rew_ang_vel_xy.mean().item(),
+            "feet_air_time":  rew_air_time.mean().item(),
+            "feet_air_var":   rew_air_var.mean().item(),
+            "feet_gait":      rew_gait.mean().item(),
+            "feet_slide":     rew_slide.mean().item(),
+            "stand_still":    rew_stand.mean().item(),
+            "action_rate":    rew_action_rate.mean().item(),
+            "joint_torques":  rew_torques.mean().item(),
+            "joint_acc":      rew_joint_acc.mean().item(),
+            "joint_limits":   rew_limits.mean().item(),
+            "imitation_jp":   rew_imit_jp.mean().item(),
+            "imitation_jv":   rew_imit_jv.mean().item(),
             "termination":    rew_term.mean().item(),
         }
         return total
