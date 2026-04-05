@@ -21,11 +21,18 @@ echo "  log: $LOG"
 source /home/bsrl/miniconda3/etc/profile.d/conda.sh
 conda activate thunder2
 
+RESUME_ARG=""
+if [ -n "$RESUME" ]; then
+    RESUME_ARG="--resume $RESUME"
+    echo "  resume: $RESUME"
+fi
+
 nohup env CUDA_VISIBLE_DEVICES=$GPU \
     python "$SCRIPT_DIR/scripts/train_amp.py" \
     --num_envs $NUM_ENVS \
     --max_iterations $MAX_ITER \
     --task_lerp $TASK_LERP \
+    $RESUME_ARG \
     --headless \
     > "$LOG" 2>&1 &
 
