@@ -193,14 +193,16 @@ class OrixAmpEnv(DirectRLEnv):
         return {"policy": policy_obs, "critic": critic_obs}
 
     def _resolve_contact_indexes(self):
-        """Lazily resolve contact sensor body indexes on first use."""
+        """Lazily resolve contact sensor body indexes using ContactSensor.find_bodies()."""
         if self._foot_cf_indexes is not None:
             return
         try:
-            cf_names = self.contact_sensor.data.body_names
-            self._foot_cf_indexes = [cf_names.index(n) for n in self.foot_body_names]
-            self._base_cf_index   = cf_names.index("base_link")
-            print(f"[OrixAmpEnv] contact sensor foot_cf_indexes={self._foot_cf_indexes}")
+            # body_names is on ContactSensor, not ContactSensorData
+            foot_ids, _ = self.contact_sensor.find_bodies(self.foot_body_names)
+            base_ids, _ = self.contact_sensor.find_bodies(["base_link"])
+            self._foot_cf_indexes = foot_ids
+            self._base_cf_index   = base_ids[0] if base_ids else None
+            print(f"[OrixAmpEnv] contact sensor foot_cf_indexes={self._foot_cf_indexes} base={self._base_cf_index}")
         except (ValueError, AttributeError) as e:
             print(f"[OrixAmpEnv] contact sensor index resolution failed: {e}")
             self._foot_cf_indexes = []
