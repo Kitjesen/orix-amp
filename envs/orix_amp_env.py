@@ -258,8 +258,11 @@ class OrixAmpEnv(DirectRLEnv):
 
         # 4. Feet air time (reward symmetric swing)
         air_time = torch.zeros(self.num_envs, 4, device=self.device)
-        if cf_idx and hasattr(self.contact_sensor.data, "current_air_time"):
-            air_time = self.contact_sensor.data.current_air_time[:, cf_idx]
+        if cf_idx and self.contact_sensor.data.current_air_time is not None:
+            try:
+                air_time = self.contact_sensor.data.current_air_time[:, cf_idx]
+            except IndexError:
+                pass
         at_threshold = (air_time - cfg.feet_air_time_threshold).clamp(min=0.0)
         rew_air_time = cfg.rew_feet_air_time * at_threshold.sum(dim=-1) * (~cmd_zero).float()
 

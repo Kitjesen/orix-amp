@@ -74,11 +74,11 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     # ── Obs / action spaces ───────────────────────────────────────────────────
     # actor: joint_pos(12)+joint_vel(12)+height(1)+proj_grav(3)+key_body(12)+cmd(3)+progress(1) = 44
     # critic: actor(44)+base_lin_vel(3)+feet_contact(4)+height_scan(25) = 76
-    # AMP: actor minus cmd(3) minus progress(1) = 40
+    # AMP: single frame, no cmd/progress = 40
     observation_space = 44
     action_space      = 12
     state_space       = 76
-    num_amp_observations  = 3
+    num_amp_observations  = 1   # single frame — prevents discriminator exploiting temporal artifacts
     amp_observation_space = 40
 
     # ── Env timing ────────────────────────────────────────────────────────────
@@ -90,10 +90,10 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     early_termination  = True
     termination_height = 0.15  # base z below this → episode end
 
-    # ── Velocity command ranges ───────────────────────────────────────────────
-    cmd_lin_vel_x_range: tuple = (-1.0, 1.0)   # m/s
-    cmd_lin_vel_y_range: tuple = (-0.5, 0.5)
-    cmd_ang_vel_z_range: tuple = (-1.0, 1.0)   # rad/s
+    # ── Velocity command ranges (conservative for small robot, learn to walk first) ──
+    cmd_lin_vel_x_range: tuple = (-0.5, 0.5)   # m/s
+    cmd_lin_vel_y_range: tuple = (-0.3, 0.3)
+    cmd_ang_vel_z_range: tuple = (-0.5, 0.5)   # rad/s
 
     # ── Motion reference ──────────────────────────────────────────────────────
     motion_file    = os.path.join(MOTIONS_DIR, "orix_trot_medium_30.npz")
@@ -111,13 +111,13 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     rew_lin_vel_z_l2:   float = -2.0     # penalise vertical base velocity
     rew_ang_vel_xy_l2:  float = -0.05    # penalise roll/pitch rate
 
-    # Foot behaviour
-    rew_feet_air_time:          float =  0.3
-    feet_air_time_threshold:    float =  0.5   # sec
-    rew_feet_air_time_variance: float = -1.0
-    rew_feet_gait:              float =  0.5
-    rew_feet_slide:             float = -0.1
-    rew_feet_contact_no_cmd:    float =  0.1   # encourage standing when cmd=0
+    # Foot behaviour — gait phase is critical
+    rew_feet_air_time:          float =  1.0   # was 0.3 — strongly reward proper swing
+    feet_air_time_threshold:    float =  0.3   # was 0.5 — shorter threshold for small robot
+    rew_feet_air_time_variance: float = -2.0   # was -1.0 — penalise asymmetric gaits harder
+    rew_feet_gait:              float =  2.0   # was 0.5 — diagonal sync is critical
+    rew_feet_slide:             float = -0.2   # was -0.1 — penalise foot drag
+    rew_feet_contact_no_cmd:    float =  0.1
 
     # Regularisation
     rew_action_rate_l2:   float = -0.01

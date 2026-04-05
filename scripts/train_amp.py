@@ -84,15 +84,15 @@ def main() -> None:
         amp_replay_buffer_size = 1_000_000,
         amp_expert_preload   = 200_000,
         amp_batch_size       = 512,
-        num_disc_updates     = 5,
-        disc_grad_penalty    = 10.0,
+        num_disc_updates     = 3,        # was 5 — slow down discriminator
+        disc_grad_penalty    = 50.0,     # was 10 — strong regularization
         disc_reward_scale    = 2.0,
-        disc_learning_rate   = 1e-4,
+        disc_learning_rate   = 5e-5,     # was 1e-4 — slower disc learning
         # Networks
         actor_hidden  = [512, 256, 128],
         critic_hidden = [512, 256, 128],
-        disc_hidden   = [1024, 512],
-        init_noise_std = 1.0,
+        disc_hidden   = [256, 128],      # was [1024, 512] — prevent disc overfitting
+        init_noise_std = 0.5,            # was 1.0
         # I/O
         save_interval = 500,
         log_dir       = log_dir,
