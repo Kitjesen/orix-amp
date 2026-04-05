@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CHECKPOINT="${CHECKPOINT:-logs/orix_amp/2026-04-05_04-04-02/model_final.pt}"
+CHECKPOINT="${CHECKPOINT:-$SCRIPT_DIR/logs/orix_amp/2026-04-05_04-04-02/model_final.pt}"
 GPU="${GPU:-1}"
 CMD_VX="${CMD_VX:-0.5}"
 VIDEO_LEN="${VIDEO_LEN:-300}"
@@ -18,24 +18,18 @@ conda activate thunder2
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 
 # Virtual display
-pkill -f 'Xvfb :98' 2>/dev/null || true
-sleep 1
-Xvfb :98 -screen 0 1920x1080x24 -ac +extension GLX &
-XVFB_PID=$!
-sleep 3
-
 LOG="$SCRIPT_DIR/logs/video_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "$SCRIPT_DIR/logs"
 echo "  log: $LOG"
 
-DISPLAY=:98 CUDA_VISIBLE_DEVICES=$GPU \
+# headless.rendering.kit = headless + enable_cameras (no display needed)
+CUDA_VISIBLE_DEVICES=$GPU \
     python "$SCRIPT_DIR/scripts/record_video.py" \
     --checkpoint "$CHECKPOINT" \
     --video_length $VIDEO_LEN \
     --cmd_vx $CMD_VX \
     --video \
+    --headless \
     --enable_cameras \
     2>&1 | tee "$LOG"
-
-kill $XVFB_PID 2>/dev/null || true
 echo "=== Done ==="

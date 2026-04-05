@@ -16,13 +16,12 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint",  type=str, required=True)
 parser.add_argument("--num_envs",    type=int, default=1)
-parser.add_argument("--video_length",type=int, default=500)
-parser.add_argument("--cmd_vx",      type=float, default=0.5)
-parser.add_argument("--video",       action="store_true", default=True)
+parser.add_argument("--video_length", type=int, default=500)
+parser.add_argument("--cmd_vx",       type=float, default=0.5)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
-# Must enable cameras for video recording
+# Force headless rendering kit (headless + enable_cameras = headless.rendering.kit)
 args.enable_cameras = True
 
 app_launcher   = AppLauncher(args)
