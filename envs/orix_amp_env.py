@@ -74,6 +74,11 @@ class OrixAmpEnv(DirectRLEnv):
         # Key bodies for AMP obs (same as feet)
         self.key_body_indexes = self.foot_body_indexes
 
+        # Contact sensor body indexes — separate from robot body indexes
+        # Must be resolved AFTER scene is set up and sensor data is available
+        self._foot_cf_indexes: list[int] | None = None
+        self._base_cf_index:   int       | None = None
+
         # Motion DOF mapping
         self.motion_dof_indexes      = self._motion_loader.get_dof_index(self.robot.data.joint_names)
         self.motion_ref_body_index   = self._motion_loader.get_body_index([self.cfg.reference_body])[0]
@@ -187,6 +192,20 @@ class OrixAmpEnv(DirectRLEnv):
 
         return {"policy": policy_obs, "critic": critic_obs}
 
+    def _resolve_contact_indexes(self):
+        """Lazily resolve contact sensor body indexes on first use."""
+        if self._foot_cf_indexes is not None:
+            return
+        try:
+            cf_names = self.contact_sensor.data.body_names
+            self._foot_cf_indexes = [cf_names.index(n) for n in self.foot_body_names]
+            self._base_cf_index   = cf_names.index("base_link")
+            print(f"[OrixAmpEnv] contact sensor foot_cf_indexes={self._foot_cf_indexes}")
+        except (ValueError, AttributeError) as e:
+            print(f"[OrixAmpEnv] contact sensor index resolution failed: {e}")
+            self._foot_cf_indexes = []
+            self._base_cf_index   = None
+
     def _get_height_scan(self, root_pos_w: torch.Tensor) -> torch.Tensor:
         """5×5 height scan, 0.25m spacing. Returns height relative to robot base."""
         offsets = torch.linspace(-0.5, 0.5, 5, device=self.device)
@@ -231,42 +250,37 @@ class OrixAmpEnv(DirectRLEnv):
         rew_lin_vel_z  = cfg.rew_lin_vel_z_l2  * self.robot.data.root_lin_vel_w[:, 2].pow(2)
         rew_ang_vel_xy = cfg.rew_ang_vel_xy_l2 * base_ang_vel_b[:, :2].pow(2).sum(dim=-1)
 
+        # Resolve contact sensor indexes lazily
+        self._resolve_contact_indexes()
+        cf_idx = self._foot_cf_indexes  # contact sensor indexes for feet
+
         # 4. Feet air time (reward symmetric swing)
-        air_time     = self.contact_sensor.data.current_air_time[:, self.foot_body_indexes] \
-            if hasattr(self.contact_sensor.data, "current_air_time") \
-            else torch.zeros(self.num_envs, 4, device=self.device)
+        air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        if cf_idx and hasattr(self.contact_sensor.data, "current_air_time"):
+            air_time = self.contact_sensor.data.current_air_time[:, cf_idx]
         at_threshold = (air_time - cfg.feet_air_time_threshold).clamp(min=0.0)
         rew_air_time = cfg.rew_feet_air_time * at_threshold.sum(dim=-1) * (~cmd_zero).float()
 
         # 5. Feet air time variance (penalise asymmetry)
         rew_air_var = cfg.rew_feet_air_time_variance * air_time.var(dim=-1)
 
-        # 6. Feet gait (diagonal pairs should be in sync: FL+RR, FR+RL)
-        contact_bool = self.contact_sensor.data.net_forces_w[:, :, 2] > 1.0 \
-            if hasattr(self.contact_sensor.data, "net_forces_w") \
-            else torch.zeros(self.num_envs, len(self.foot_body_indexes), dtype=torch.bool, device=self.device)
-        # FL=0, FR=1, RL=2, RR=3 — diagonal pairs should match
-        try:
-            fl_idx = [self.contact_sensor.data.body_names.index(n) for n in self.foot_body_names]
-            fl_contact = contact_bool[:, fl_idx[0]].float()
-            fr_contact = contact_bool[:, fl_idx[1]].float()
-            rl_contact = contact_bool[:, fl_idx[2]].float()
-            rr_contact = contact_bool[:, fl_idx[3]].float()
-            gait_sync = (fl_contact * rr_contact + fr_contact * rl_contact) * 0.5
-            rew_gait  = cfg.rew_feet_gait * gait_sync
-        except (ValueError, AttributeError):
-            rew_gait = torch.zeros(self.num_envs, device=self.device)
+        # 6. Feet gait (diagonal pairs: FL+RR, FR+RL in sync)
+        rew_gait = torch.zeros(self.num_envs, device=self.device)
+        contact_bool = torch.zeros(self.num_envs, 4, dtype=torch.bool, device=self.device)
+        if cf_idx and hasattr(self.contact_sensor.data, "net_forces_w"):
+            contact_bool = self.contact_sensor.data.net_forces_w[:, cf_idx, 2] > 1.0
+            # FL=0, FR=1, RL=2, RR=3
+            gait_sync = (contact_bool[:, 0].float() * contact_bool[:, 3].float()
+                       + contact_bool[:, 1].float() * contact_bool[:, 2].float()) * 0.5
+            rew_gait = cfg.rew_feet_gait * gait_sync
 
         # 7. Feet slide (penalise foot velocity when in contact)
         rew_slide = torch.zeros(self.num_envs, device=self.device)
-        if hasattr(self.contact_sensor.data, "net_forces_w"):
-            foot_vel = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2]  # (N,4,2)
-            foot_speed = foot_vel.norm(dim=-1)   # (N,4)
-            try:
-                in_contact = contact_bool[:, fl_idx].float()
-                rew_slide  = cfg.rew_feet_slide * (foot_speed * in_contact).sum(dim=-1)
-            except Exception:
-                pass
+        if cf_idx:
+            foot_vel   = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2]  # (N,4,2)
+            foot_speed = foot_vel.norm(dim=-1)                                           # (N,4)
+            in_contact = contact_bool.float()
+            rew_slide  = cfg.rew_feet_slide * (foot_speed * in_contact).sum(dim=-1)
 
         # 8. Stand still when cmd≈0
         rew_stand = cfg.rew_stand_still * cmd_zero.float() * \
@@ -277,22 +291,17 @@ class OrixAmpEnv(DirectRLEnv):
 
         # 10. Undesired contacts (base should not touch ground)
         rew_undesired = torch.zeros(self.num_envs, device=self.device)
-        if hasattr(self.contact_sensor.data, "net_forces_w"):
-            try:
-                base_cf_idx = self.contact_sensor.data.body_names.index("base_link")
-                base_contact = (self.contact_sensor.data.net_forces_w[:, base_cf_idx].norm(dim=-1) > 1.0).float()
-                rew_undesired = cfg.rew_undesired_contacts * base_contact
-            except (ValueError, AttributeError):
-                pass
+        if self._base_cf_index is not None and hasattr(self.contact_sensor.data, "net_forces_w"):
+            base_contact = (
+                self.contact_sensor.data.net_forces_w[:, self._base_cf_index].norm(dim=-1) > 1.0
+            ).float()
+            rew_undesired = cfg.rew_undesired_contacts * base_contact
 
         # 11. Excessive contact forces on feet
         rew_cf = torch.zeros(self.num_envs, device=self.device)
-        if hasattr(self.contact_sensor.data, "net_forces_w"):
-            try:
-                foot_forces = self.contact_sensor.data.net_forces_w[:, fl_idx].norm(dim=-1)
-                rew_cf = cfg.rew_contact_forces * foot_forces.clamp(min=100.0).sum(dim=-1)
-            except Exception:
-                pass
+        if cf_idx and hasattr(self.contact_sensor.data, "net_forces_w"):
+            foot_forces = self.contact_sensor.data.net_forces_w[:, cf_idx].norm(dim=-1)  # (N,4)
+            rew_cf = cfg.rew_contact_forces * foot_forces.clamp(min=100.0).sum(dim=-1)
 
         # 12. Action rate (smoothness)
         rew_action_rate = cfg.rew_action_rate_l2 * (self.actions - self.last_actions).pow(2).sum(dim=-1)
