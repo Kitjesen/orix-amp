@@ -82,13 +82,13 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     amp_observation_space = 40
 
     # ── Env timing ────────────────────────────────────────────────────────────
-    episode_length_s = 33.33   # 33.33s × 30Hz = 1000 steps
-    decimation       = 4       # policy step = 4 physics steps
-    dt               = 1 / 120
+    episode_length_s = 20.0    # 20s × 50Hz = 1000 steps (matches robot_lab)
+    decimation       = 4       # policy step = 4 × 0.005s = 0.02s = 50Hz
+    dt               = 0.005  # 5ms physics dt (matches robot_lab sim.dt)
 
     # ── Termination ───────────────────────────────────────────────────────────
     early_termination  = True
-    termination_height = 0.12  # base z below this → episode end (lowered for recovery room)
+    termination_height = 0.15  # base z below this → episode end
 
     # ── Velocity command ranges ───────────────────────────────────────────────
     cmd_lin_vel_x_range: tuple = (-1.0, 1.0)   # m/s
@@ -141,8 +141,8 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
 
     # ── Simulation ────────────────────────────────────────────────────────────
     sim: SimulationCfg = SimulationCfg(
-        dt=dt,
-        render_interval=decimation,
+        dt=0.005,
+        render_interval=4,
         physx=PhysxCfg(
             gpu_found_lost_pairs_capacity=2**23,
             gpu_total_aggregate_pairs_capacity=2**23,
