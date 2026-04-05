@@ -343,7 +343,10 @@ class OrixAmpEnv(DirectRLEnv):
         self.last_actions.copy_(self.actions)
         self.last_joint_vel.copy_(self.robot.data.joint_vel)
 
-        total = (
+        # Multiply by step_dt to match robot_lab RewardManager: value = weight * dt * func()
+        # This keeps value function estimates at the same scale as robot_lab
+        dt = self.step_dt
+        total = dt * (
             rew_track_lin + rew_track_ang
             + rew_upward + rew_lin_vel_z + rew_ang_vel_xy
             + rew_air_time + rew_air_var + rew_gait + rew_slide
@@ -351,8 +354,7 @@ class OrixAmpEnv(DirectRLEnv):
             + rew_undesired + rew_cf
             + rew_action_rate + rew_torques + rew_joint_acc + rew_limits
             + rew_imit_jp + rew_imit_jv
-            + rew_term
-        )
+        ) + rew_term  # termination not time-scaled (binary event)
 
         # Per-term breakdown for logging (per-step mean, matching robot_lab Episode_Reward format)
         self.extras["reward_terms"] = {
