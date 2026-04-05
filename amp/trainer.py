@@ -404,7 +404,7 @@ class AMPTrainer:
         print(f"[AMP] Saved: {path}")
 
     def load(self, path: str) -> None:
-        ckpt = torch.load(path, map_location=self.device)
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.it = ckpt["iteration"]
         self.actor_critic.load_state_dict(ckpt["actor_critic"])
         self.discriminator.load_state_dict(ckpt["discriminator"])
