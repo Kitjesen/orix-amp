@@ -17,6 +17,11 @@ source /home/bsrl/miniconda3/etc/profile.d/conda.sh
 conda activate thunder2
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 
+# Resolve URDF mesh paths: package://orix_dog/meshes/*.STL
+# Create symlink so orix_dog → urdf/, then set ROS_PACKAGE_PATH
+ln -sf "$SCRIPT_DIR/urdf" "$SCRIPT_DIR/orix_dog" 2>/dev/null
+export ROS_PACKAGE_PATH="$SCRIPT_DIR:${ROS_PACKAGE_PATH:-}"
+
 # Virtual display
 LOG="$SCRIPT_DIR/logs/video_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "$SCRIPT_DIR/logs"
@@ -28,7 +33,6 @@ CUDA_VISIBLE_DEVICES=$GPU \
     --checkpoint "$CHECKPOINT" \
     --video_length $VIDEO_LEN \
     --cmd_vx $CMD_VX \
-    --video \
     --headless \
     --enable_cameras \
     2>&1 | tee "$LOG"

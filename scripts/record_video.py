@@ -15,7 +15,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint",  type=str, required=True)
-parser.add_argument("--num_envs",    type=int, default=1)
+parser.add_argument("--num_envs",    type=int, default=16)
 parser.add_argument("--video_length", type=int, default=500)
 parser.add_argument("--cmd_vx",       type=float, default=0.5)
 AppLauncher.add_app_launcher_args(parser)
