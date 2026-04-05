@@ -112,18 +112,18 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     rew_ang_vel_xy_l2:  float = -0.05    # penalise roll/pitch rate
 
     # Foot behaviour — gait phase is critical
-    rew_feet_air_time:          float =  1.0   # was 0.3 — strongly reward proper swing
-    feet_air_time_threshold:    float =  0.3   # was 0.5 — shorter threshold for small robot
-    rew_feet_air_time_variance: float = -2.0   # was -1.0 — penalise asymmetric gaits harder
-    rew_feet_gait:              float =  2.0   # was 0.5 — diagonal sync is critical
-    rew_feet_slide:             float = -0.2   # was -0.1 — penalise foot drag
+    rew_feet_air_time:          float =  0.5
+    feet_air_time_threshold:    float =  0.3   # shorter for small robot
+    rew_feet_air_time_variance: float = -1.5
+    rew_feet_gait:              float =  1.0   # diagonal sync emphasis
+    rew_feet_slide:             float = -0.15
     rew_feet_contact_no_cmd:    float =  0.1
 
     # Regularisation
     rew_action_rate_l2:   float = -0.01
     rew_joint_torques_l2: float = -2.5e-5
     rew_joint_acc_l2:     float = -2.5e-7
-    rew_joint_pos_limits: float = -5.0
+    rew_joint_pos_limits: float = -2.0
     rew_stand_still:      float = -0.5
 
     # Contact penalties
