@@ -318,11 +318,13 @@ class OrixAmpEnv(DirectRLEnv):
         joint_acc = (self.robot.data.joint_vel - self.last_joint_vel) / (self.cfg.decimation * self.cfg.dt)
         rew_joint_acc = cfg.rew_joint_acc_l2 * joint_acc.pow(2).sum(dim=-1)
 
-        # 15. Joint position limits
+        # 15. Joint position limits — continuous penalty (distance beyond soft limits)
         jpos   = self.robot.data.joint_pos
         lo     = self.robot.data.soft_joint_pos_limits[0, :, 0]
         hi     = self.robot.data.soft_joint_pos_limits[0, :, 1]
-        out    = ((jpos < lo) | (jpos > hi)).float().sum(dim=-1)
+        below  = (lo - jpos).clamp(min=0.0)  # how far below lower limit
+        above  = (jpos - hi).clamp(min=0.0)  # how far above upper limit
+        out    = (below.pow(2) + above.pow(2)).sum(dim=-1)  # sum of squared violations
         rew_limits = cfg.rew_joint_pos_limits * out
 
         # 16. Imitation (keeps style reward grounded in reference motion)
