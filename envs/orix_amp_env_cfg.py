@@ -122,8 +122,8 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     rew_base_height_l2:      float = -5.0     # penalise deviation from target height
     base_height_target:      float =  0.21    # FK: thigh=0.3, calf=1.1 → standing 0.21m
     rew_flat_orientation_l2: float = -2.0     # penalise body tilt (roll/pitch)
-    rew_feet_height_body:    float = -1.0     # penalise feet too high relative to body
-    feet_height_body_target: float = -0.2     # feet should be ~0.2m below body
+    rew_feet_height:         float =  1.0      # reward feet reaching swing height target
+    feet_height_target:      float =  0.05    # target swing foot height (m above ground)
 
     # Foot behaviour — gait phase is critical
     rew_feet_air_time:          float =  0.5

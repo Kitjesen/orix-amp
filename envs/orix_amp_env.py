@@ -260,12 +260,17 @@ class OrixAmpEnv(DirectRLEnv):
         # proj_gravity_b[2] = -1 when perfectly upright, deviation from -1 = tilt
         rew_flat_orient = cfg.rew_flat_orientation_l2 * (proj_gravity_b[:, :2].pow(2).sum(dim=-1))
 
-        # 3d. Feet height relative to body — prevent high-stepping
+        # 3d. Feet swing height — reward feet reaching target height during swing
         feet_pos_z = self.robot.data.body_pos_w[:, self.foot_body_indexes, 2]  # (N, 4)
-        body_z = root_pos_w[:, 2:3]  # (N, 1)
-        feet_rel_z = feet_pos_z - body_z  # negative = below body
-        feet_above_target = (feet_rel_z - cfg.feet_height_body_target).clamp(min=0.0)
-        rew_feet_height = cfg.rew_feet_height_body * feet_above_target.pow(2).sum(dim=-1)
+        ground_z   = self.scene.env_origins[:, 2:3]  # (N, 1)
+        feet_height_above_ground = feet_pos_z - ground_z  # (N, 4)
+        # Only reward swing feet (not in contact) reaching target height
+        if cf_idx and self.contact_sensor.data.net_forces_w is not None:
+            in_swing = (self.contact_sensor.data.net_forces_w[:, cf_idx, 2].abs() < 1.0).float()
+        else:
+            in_swing = torch.ones(self.num_envs, 4, device=self.device)
+        height_reward = torch.clamp(feet_height_above_ground - cfg.feet_height_target, min=0.0)
+        rew_feet_height = cfg.rew_feet_height * (height_reward * in_swing).sum(dim=-1)
 
         # Resolve contact sensor indexes lazily
         self._resolve_contact_indexes()
@@ -388,7 +393,7 @@ class OrixAmpEnv(DirectRLEnv):
             "ang_vel_xy":     rew_ang_vel_xy.mean().item(),
             "base_height":    rew_base_height.mean().item(),
             "flat_orient":    rew_flat_orient.mean().item(),
-            "feet_height":    rew_feet_height.mean().item(),
+            "feet_swing_h":   rew_feet_height.mean().item(),
             "feet_air_time":  rew_air_time.mean().item(),
             "feet_air_var":   rew_air_var.mean().item(),
             "feet_gait":      rew_gait.mean().item(),
