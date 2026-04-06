@@ -260,6 +260,10 @@ class OrixAmpEnv(DirectRLEnv):
         # proj_gravity_b[2] = -1 when perfectly upright, deviation from -1 = tilt
         rew_flat_orient = cfg.rew_flat_orientation_l2 * (proj_gravity_b[:, :2].pow(2).sum(dim=-1))
 
+        # Resolve contact sensor indexes (needed by multiple rewards below)
+        self._resolve_contact_indexes()
+        cf_idx = self._foot_cf_indexes
+
         # 3d. Feet swing height — reward feet reaching target height during swing
         feet_pos_z = self.robot.data.body_pos_w[:, self.foot_body_indexes, 2]  # (N, 4)
         ground_z   = self.scene.env_origins[:, 2:3]  # (N, 1)
@@ -271,10 +275,6 @@ class OrixAmpEnv(DirectRLEnv):
             in_swing = torch.ones(self.num_envs, 4, device=self.device)
         height_reward = torch.clamp(feet_height_above_ground - cfg.feet_height_target, min=0.0)
         rew_feet_height = cfg.rew_feet_height * (height_reward * in_swing).sum(dim=-1)
-
-        # Resolve contact sensor indexes lazily
-        self._resolve_contact_indexes()
-        cf_idx = self._foot_cf_indexes  # contact sensor indexes for feet
 
         # 4. Feet air time (reward symmetric swing)
         air_time = torch.zeros(self.num_envs, 4, device=self.device)
