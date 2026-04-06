@@ -43,12 +43,12 @@ ORIX_DOG_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.35),
+        pos=(0.0, 0.0, 0.30),
         joint_pos={
-            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.65, "FR_calf_joint":  1.3,
-            "FL_hip_joint": 0.0, "FL_thigh_joint":  0.65, "FL_calf_joint": -1.3,
-            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.65, "RR_calf_joint":  1.3,
-            "RL_hip_joint": 0.0, "RL_thigh_joint":  0.65, "RL_calf_joint": -1.3,
+            "FR_hip_joint": 0.0, "FR_thigh_joint": -0.3, "FR_calf_joint":  1.1,
+            "FL_hip_joint": 0.0, "FL_thigh_joint":  0.3, "FL_calf_joint": -1.1,
+            "RR_hip_joint": 0.0, "RR_thigh_joint": -0.3, "RR_calf_joint":  1.1,
+            "RL_hip_joint": 0.0, "RL_thigh_joint":  0.3, "RL_calf_joint": -1.1,
         },
         joint_vel={".*": 0.0},
     ),
