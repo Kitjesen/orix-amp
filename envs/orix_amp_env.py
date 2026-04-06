@@ -51,9 +51,14 @@ class OrixAmpEnv(DirectRLEnv):
     def __init__(self, cfg: OrixAmpEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        # Action offset = default standing pose, scale = residual magnitude
-        self.action_offset  = self.robot.data.default_joint_pos[0].clone()
-        self.action_scale   = 0.5   # radians
+        # Action offset = default standing pose, per-joint scale (match robot_lab)
+        self.action_offset = self.robot.data.default_joint_pos[0].clone()
+        # hip: 0.1 rad, thigh/calf: 0.2 rad (robot_lab action_scale config)
+        self.action_scale = torch.ones(cfg.action_space, device=self.device) * 0.2
+        for i, name in enumerate(self.robot.data.joint_names):
+            if "hip" in name:
+                self.action_scale[i] = 0.1
+        self.action_clip = 3.0  # match robot_lab ±3.0
         self.last_actions   = torch.zeros(self.num_envs, cfg.action_space, device=self.device)
         self.last_joint_vel = torch.zeros(self.num_envs, cfg.action_space, device=self.device)
 
@@ -119,7 +124,7 @@ class OrixAmpEnv(DirectRLEnv):
     # ── Action ────────────────────────────────────────────────────────────────
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        self.actions = actions.clone()
+        self.actions = actions.clamp(-self.action_clip, self.action_clip)
 
     def _apply_action(self):
         target = self.action_offset + self.action_scale * self.actions

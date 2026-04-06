@@ -54,22 +54,13 @@ ORIX_DOG_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "hip_thigh": DCMotorCfg(
-            joint_names_expr=[".*_hip_joint", ".*_thigh_joint"],
-            effort_limit=18.0,
-            saturation_effort=18.0,
-            velocity_limit=35.0,
-            stiffness=25.0,
-            damping=0.5,
-            friction=0.0,
-        ),
-        "calf": DCMotorCfg(
-            joint_names_expr=[".*_calf_joint"],
-            effort_limit=36.0,     # URDF: calf effort=36 (was wrongly 18)
-            saturation_effort=36.0,
-            velocity_limit=17.5,   # URDF: calf velocity=17.5 (was wrongly 35)
-            stiffness=25.0,
-            damping=0.5,
+        "legs": DCMotorCfg(
+            joint_names_expr=[".*_joint"],
+            effort_limit=23.7,     # match robot_lab
+            saturation_effort=23.7,
+            velocity_limit=30.0,   # match robot_lab
+            stiffness=20.0,        # was 25 → match robot_lab
+            damping=1.0,           # was 0.5 → match robot_lab (critical for damping oscillation)
             friction=0.0,
         ),
     },
