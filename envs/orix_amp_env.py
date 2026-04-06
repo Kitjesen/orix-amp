@@ -9,10 +9,10 @@ Rewards mirror robot_lab Go2 flat env:
   joint_pos_limits, stand_still, undesired_contacts, contact_forces,
   termination + imitation (joint_pos, joint_vel).
 
-Obs:
-  Actor  (41D): joint_pos+vel + base_height + proj_gravity + key_body_pos + progress
-  Critic (73D): actor + base_lin_vel + feet_contact + height_scan(5x5)
-  AMP    (40D): actor minus progress (all realizable on real robot)
+Obs (aligned with robot_lab):
+  Actor  (45D): base_ang_vel + proj_gravity + cmd + joint_pos_rel + joint_vel + last_actions
+  Critic (48D): actor + base_lin_vel (privileged)
+  AMP    (30D): joint_pos_rel + joint_vel + proj_gravity + base_ang_vel
 """
 from __future__ import annotations
 
@@ -133,56 +133,45 @@ class OrixAmpEnv(DirectRLEnv):
     # ── Observations ──────────────────────────────────────────────────────────
 
     def _get_observations(self) -> dict:
-        progress    = (self.episode_length_buf.float() / (self.max_episode_length - 1)).unsqueeze(-1)
-        root_pos_w  = self.robot.data.body_pos_w[:, self.ref_body_index]   # (N, 3)
-        root_quat_w = self.robot.data.body_quat_w[:, self.ref_body_index]  # (N, 4) wxyz
+        cfg = self.cfg
+        root_pos_w  = self.robot.data.body_pos_w[:, self.ref_body_index]
+        root_quat_w = self.robot.data.body_quat_w[:, self.ref_body_index]
 
-        # base height (env-relative z)
-        base_height = (root_pos_w[:, 2] - self.scene.env_origins[:, 2]).unsqueeze(-1)  # (N,1)
+        # Body-frame velocities
+        base_ang_vel_b = _quat_rotate_inverse(root_quat_w, self.robot.data.root_ang_vel_w)
+        base_lin_vel_b = _quat_rotate_inverse(root_quat_w, self.robot.data.root_lin_vel_w)
 
-        # projected gravity → body frame (IMU-measurable)
-        gravity_w       = torch.tensor([0., 0., -1.], device=self.device).expand(self.num_envs, 3)
-        proj_gravity    = _quat_rotate_inverse(root_quat_w, gravity_w)    # (N,3)
+        # Projected gravity (IMU)
+        gravity_w    = torch.tensor([0., 0., -1.], device=self.device).expand(self.num_envs, 3)
+        proj_gravity = _quat_rotate_inverse(root_quat_w, gravity_w)
 
-        # key body positions relative to root (FK-computable)
-        key_body_rel = (
-            self.robot.data.body_pos_w[:, self.key_body_indexes]
-            - root_pos_w.unsqueeze(1)
-        ).reshape(self.num_envs, -1)                                       # (N,12)
+        # Joint pos/vel relative to default
+        joint_pos_rel = self.robot.data.joint_pos - self.action_offset
+        joint_vel     = self.robot.data.joint_vel
 
-        # ── AMP obs (40D) ─────────────────────────────────────────────────────
+        # ── AMP obs (30D) — extractable from motion data ─────────────────────
         amp_obs = torch.cat([
-            self.robot.data.joint_pos,   # 12
-            self.robot.data.joint_vel,   # 12
-            base_height,                 #  1
-            proj_gravity,                #  3
-            key_body_rel,                # 12
-        ], dim=-1)  # 40
+            joint_pos_rel * cfg.obs_scale_joint_pos,   # 12
+            joint_vel     * cfg.obs_scale_joint_vel,    # 12
+            proj_gravity,                               #  3
+            base_ang_vel_b * cfg.obs_scale_ang_vel,     #  3
+        ], dim=-1)  # 30
 
-        # ── Actor obs (44D) ───────────────────────────────────────────────────
-        policy_obs = torch.cat([amp_obs, self.commands, progress], dim=-1)  # 44
+        # ── Actor obs (45D) — match robot_lab ─────────────────────────────────
+        policy_obs = torch.cat([
+            base_ang_vel_b * cfg.obs_scale_ang_vel,     #  3
+            proj_gravity,                               #  3
+            self.commands,                              #  3
+            joint_pos_rel * cfg.obs_scale_joint_pos,    # 12
+            joint_vel     * cfg.obs_scale_joint_vel,    # 12
+            self.last_actions,                          # 12
+        ], dim=-1)  # 45
 
-        # ── Critic privileged obs (73D) ───────────────────────────────────────
-        base_lin_vel = _quat_rotate_inverse(
-            root_quat_w, self.robot.data.root_lin_vel_w
-        )  # (N,3) body frame
-
-        # feet contact forces: net force magnitude per foot
-        feet_contact = torch.zeros(self.num_envs, 4, device=self.device)
-        if hasattr(self.contact_sensor.data, "net_forces_w"):
-            # body indexes in contact sensor may differ from articulation — use body name match
-            for i, foot_idx in enumerate(self.foot_body_indexes):
-                try:
-                    cf_idx = self.contact_sensor.data.body_names.index(
-                        self.robot.data.body_names[foot_idx]
-                    )
-                    feet_contact[:, i] = self.contact_sensor.data.net_forces_w[:, cf_idx].norm(dim=-1)
-                except (ValueError, AttributeError):
-                    pass
-
-        height_scan = self._get_height_scan(root_pos_w)  # (N,25)
-
-        critic_obs = torch.cat([policy_obs, base_lin_vel, feet_contact, height_scan], dim=-1)  # 73
+        # ── Critic obs (48D) — actor + privileged ─────────────────────────────
+        critic_obs = torch.cat([
+            policy_obs,        # 45
+            base_lin_vel_b,    #  3  (privileged: ground truth from sim)
+        ], dim=-1)  # 48
 
         # ── Update AMP history ────────────────────────────────────────────────
         for i in reversed(range(self.cfg.num_amp_observations - 1)):
@@ -213,20 +202,10 @@ class OrixAmpEnv(DirectRLEnv):
             self._foot_cf_indexes = []
             self._base_cf_index   = None
 
-    def _get_height_scan(self, root_pos_w: torch.Tensor) -> torch.Tensor:
-        """5×5 height scan, 0.25m spacing. Returns height relative to robot base."""
-        offsets = torch.linspace(-0.5, 0.5, 5, device=self.device)
-        gx, gy  = torch.meshgrid(offsets, offsets, indexing="ij")
-        # flat ground: ground_z = env_origin_z
-        ground_z  = self.scene.env_origins[:, 2]                    # (N,)
-        robot_z   = root_pos_w[:, 2]                                # (N,)
-        # height of ground relative to robot base (negative = ground is below)
-        h_rel = (ground_z - robot_z).unsqueeze(-1).expand(-1, 25)   # (N,25)
-        return h_rel
-
     # ── Rewards ───────────────────────────────────────────────────────────────
 
     def _get_rewards(self) -> torch.Tensor:
+        """Reward function aligned with robot_lab orix_dog rough_env_cfg."""
         cfg = self.cfg
 
         root_pos_w  = self.robot.data.body_pos_w[:, self.ref_body_index]
@@ -235,53 +214,46 @@ class OrixAmpEnv(DirectRLEnv):
         base_lin_vel_b = _quat_rotate_inverse(root_quat_w, self.robot.data.root_lin_vel_w)
         base_ang_vel_b = _quat_rotate_inverse(root_quat_w, self.robot.data.root_ang_vel_w)
 
-        cmd_vx  = self.commands[:, 0]
-        cmd_vy  = self.commands[:, 1]
-        cmd_wz  = self.commands[:, 2]
-        cmd_zero = (self.commands.abs().sum(dim=-1) < 0.1)  # near-zero command
+        jpos = self.robot.data.joint_pos
+        jvel = self.robot.data.joint_vel
+        cmd_vx, cmd_vy, cmd_wz = self.commands[:, 0], self.commands[:, 1], self.commands[:, 2]
+        cmd_zero = (self.commands.abs().sum(dim=-1) < 0.1)
 
-        # 1. Velocity tracking
-        lin_err  = (cmd_vx - base_lin_vel_b[:, 0]).pow(2) + (cmd_vy - base_lin_vel_b[:, 1]).pow(2)
-        ang_err  = (cmd_wz - base_ang_vel_b[:, 2]).pow(2)
+        # Contact sensor
+        self._resolve_contact_indexes()
+        cf_idx = self._foot_cf_indexes
+        contact_bool = torch.zeros(self.num_envs, 4, dtype=torch.bool, device=self.device)
+        if cf_idx and hasattr(self.contact_sensor.data, "net_forces_w"):
+            contact_bool = self.contact_sensor.data.net_forces_w[:, cf_idx, 2] > 1.0
+
+        # ── Velocity tracking ─────────────────────────────────────────────────
+        lin_err = (cmd_vx - base_lin_vel_b[:, 0]).pow(2) + (cmd_vy - base_lin_vel_b[:, 1]).pow(2)
+        ang_err = (cmd_wz - base_ang_vel_b[:, 2]).pow(2)
         rew_track_lin = cfg.rew_track_lin_vel_xy * torch.exp(-lin_err / cfg.track_vel_sigma)
         rew_track_ang = cfg.rew_track_ang_vel_z  * torch.exp(-ang_err / cfg.track_vel_sigma)
 
-        # 2. Upward (keep base upright)
+        # ── Posture ───────────────────────────────────────────────────────────
         proj_gravity_b = _quat_rotate_inverse(
-            root_quat_w,
-            torch.tensor([0., 0., -1.], device=self.device).expand(self.num_envs, 3)
+            root_quat_w, torch.tensor([0., 0., -1.], device=self.device).expand(self.num_envs, 3)
         )
-        rew_upward = cfg.rew_upward * torch.clamp(-proj_gravity_b[:, 2], 0.0, 1.0)
-
-        # 3. Penalise vertical base velocity and roll/pitch rates
+        rew_upward     = cfg.rew_upward * torch.clamp(-proj_gravity_b[:, 2], 0.0, 1.0)
         rew_lin_vel_z  = cfg.rew_lin_vel_z_l2  * self.robot.data.root_lin_vel_w[:, 2].pow(2)
         rew_ang_vel_xy = cfg.rew_ang_vel_xy_l2 * base_ang_vel_b[:, :2].pow(2).sum(dim=-1)
 
-        # 3b. Base height tracking — prevents body going too high or too low
-        base_height = root_pos_w[:, 2] - self.scene.env_origins[:, 2]
-        rew_base_height = cfg.rew_base_height_l2 * (base_height - cfg.base_height_target).pow(2)
+        # ── Feet height body (robot_lab style) ────────────────────────────────
+        feet_pos_body = (
+            self.robot.data.body_pos_w[:, self.foot_body_indexes] - root_pos_w.unsqueeze(1)
+        )
+        feet_pos_body_frame = torch.zeros_like(feet_pos_body)
+        for i in range(4):
+            feet_pos_body_frame[:, i] = _quat_rotate_inverse(root_quat_w, feet_pos_body[:, i])
+        foot_z_err = (feet_pos_body_frame[:, :, 2] - cfg.feet_height_body_target).pow(2)
+        foot_xy_vel = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2]
+        vel_weight = torch.tanh(cfg.feet_height_body_tanh_mult * foot_xy_vel.norm(dim=-1))
+        rew_feet_hb = cfg.rew_feet_height_body * (foot_z_err * vel_weight).sum(dim=-1)
+        rew_feet_hb *= (~cmd_zero).float()
 
-        # 3c. Flat orientation — penalise body tilt (roll/pitch via projected gravity)
-        # proj_gravity_b[2] = -1 when perfectly upright, deviation from -1 = tilt
-        rew_flat_orient = cfg.rew_flat_orientation_l2 * (proj_gravity_b[:, :2].pow(2).sum(dim=-1))
-
-        # Resolve contact sensor indexes (needed by multiple rewards below)
-        self._resolve_contact_indexes()
-        cf_idx = self._foot_cf_indexes
-
-        # 3d. Feet swing height — penalise deviation from target (robot_lab style)
-        # Only penalise when foot is moving horizontally (swing phase)
-        feet_pos_z = self.robot.data.body_pos_w[:, self.foot_body_indexes, 2]  # (N, 4)
-        ground_z   = self.scene.env_origins[:, 2:3]  # (N, 1)
-        foot_z_err = (feet_pos_z - ground_z - cfg.feet_height_target).pow(2)  # (N, 4)
-        foot_xy_vel = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2]  # (N, 4, 2)
-        foot_speed  = foot_xy_vel.norm(dim=-1)  # (N, 4)
-        vel_weight  = torch.tanh(cfg.feet_height_tanh_mult * foot_speed)  # 0~1, active when moving
-        rew_feet_height = cfg.rew_feet_height * (foot_z_err * vel_weight).sum(dim=-1)
-        # Zero reward when command ≈ 0
-        rew_feet_height *= (~cmd_zero).float()
-
-        # 4. Feet air time (reward symmetric swing)
+        # ── Feet air time ─────────────────────────────────────────────────────
         air_time = torch.zeros(self.num_envs, 4, device=self.device)
         if cf_idx and self.contact_sensor.data.current_air_time is not None:
             try:
@@ -290,115 +262,86 @@ class OrixAmpEnv(DirectRLEnv):
                 pass
         at_threshold = (air_time - cfg.feet_air_time_threshold).clamp(min=0.0)
         rew_air_time = cfg.rew_feet_air_time * at_threshold.sum(dim=-1) * (~cmd_zero).float()
+        rew_air_var  = cfg.rew_feet_air_time_variance * air_time.var(dim=-1)
 
-        # 5. Feet air time variance (penalise asymmetry)
-        rew_air_var = cfg.rew_feet_air_time_variance * air_time.var(dim=-1)
-
-        # 6. Feet gait (diagonal pairs: FL+RR, FR+RL in sync)
+        # ── Feet gait (diagonal sync) ────────────────────────────────────────
         rew_gait = torch.zeros(self.num_envs, device=self.device)
-        contact_bool = torch.zeros(self.num_envs, 4, dtype=torch.bool, device=self.device)
-        if cf_idx and hasattr(self.contact_sensor.data, "net_forces_w"):
-            contact_bool = self.contact_sensor.data.net_forces_w[:, cf_idx, 2] > 1.0
-            # FL=0, FR=1, RL=2, RR=3
+        if cf_idx:
             gait_sync = (contact_bool[:, 0].float() * contact_bool[:, 3].float()
                        + contact_bool[:, 1].float() * contact_bool[:, 2].float()) * 0.5
             rew_gait = cfg.rew_feet_gait * gait_sync
 
-        # 7. Feet slide (penalise foot velocity when in contact)
+        # ── Feet slide ────────────────────────────────────────────────────────
         rew_slide = torch.zeros(self.num_envs, device=self.device)
         if cf_idx:
-            foot_vel   = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2]  # (N,4,2)
-            foot_speed = foot_vel.norm(dim=-1)                                           # (N,4)
-            in_contact = contact_bool.float()
-            rew_slide  = cfg.rew_feet_slide * (foot_speed * in_contact).sum(dim=-1)
+            foot_speed = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2].norm(dim=-1)
+            rew_slide = cfg.rew_feet_slide * (foot_speed * contact_bool.float()).sum(dim=-1)
 
-        # 8. Stand still when cmd≈0
-        rew_stand = cfg.rew_stand_still * cmd_zero.float() * \
-            self.robot.data.joint_vel.pow(2).sum(dim=-1)
-
-        # 9. Contact without command (encourage standing when cmd=0)
+        # ── Stand still / contact without cmd ─────────────────────────────────
+        rew_stand  = cfg.rew_stand_still * cmd_zero.float() * jvel.pow(2).sum(dim=-1)
         rew_no_cmd = cfg.rew_feet_contact_no_cmd * cmd_zero.float()
 
-        # 10. Undesired contacts (base should not touch ground)
+        # ── Contacts ──────────────────────────────────────────────────────────
         rew_undesired = torch.zeros(self.num_envs, device=self.device)
         if self._base_cf_index is not None and hasattr(self.contact_sensor.data, "net_forces_w"):
-            base_contact = (
-                self.contact_sensor.data.net_forces_w[:, self._base_cf_index].norm(dim=-1) > 1.0
-            ).float()
-            rew_undesired = cfg.rew_undesired_contacts * base_contact
-
-        # 11. Excessive contact forces on feet
+            base_f = self.contact_sensor.data.net_forces_w[:, self._base_cf_index].norm(dim=-1)
+            rew_undesired = cfg.rew_undesired_contacts * (base_f > 1.0).float()
         rew_cf = torch.zeros(self.num_envs, device=self.device)
         if cf_idx and hasattr(self.contact_sensor.data, "net_forces_w"):
-            foot_forces = self.contact_sensor.data.net_forces_w[:, cf_idx].norm(dim=-1)  # (N,4)
-            rew_cf = cfg.rew_contact_forces * foot_forces.clamp(min=100.0).sum(dim=-1)
+            foot_f = self.contact_sensor.data.net_forces_w[:, cf_idx].norm(dim=-1)
+            rew_cf = cfg.rew_contact_forces * foot_f.clamp(min=100.0).sum(dim=-1)
 
-        # 12. Action rate (smoothness)
+        # ── Regularisation ────────────────────────────────────────────────────
         rew_action_rate = cfg.rew_action_rate_l2 * (self.actions - self.last_actions).pow(2).sum(dim=-1)
+        rew_torques     = cfg.rew_joint_torques_l2 * self.robot.data.applied_torque.pow(2).sum(dim=-1)
+        joint_acc       = (jvel - self.last_joint_vel) / (cfg.decimation * cfg.dt)
+        rew_joint_acc   = cfg.rew_joint_acc_l2 * joint_acc.pow(2).sum(dim=-1)
 
-        # 13. Joint torques
-        rew_torques = cfg.rew_joint_torques_l2 * self.robot.data.applied_torque.pow(2).sum(dim=-1)
+        # Joint power = torque × velocity
+        rew_power = cfg.rew_joint_power * (self.robot.data.applied_torque * jvel).abs().sum(dim=-1)
 
-        # 14. Joint accelerations
-        joint_acc = (self.robot.data.joint_vel - self.last_joint_vel) / (self.cfg.decimation * self.cfg.dt)
-        rew_joint_acc = cfg.rew_joint_acc_l2 * joint_acc.pow(2).sum(dim=-1)
+        # Joint position penalty (deviation from default)
+        rew_pos_pen = cfg.rew_joint_pos_penalty * (jpos - self.action_offset).pow(2).sum(dim=-1)
 
-        # 15. Joint position limits — continuous penalty (distance beyond soft limits)
-        jpos   = self.robot.data.joint_pos
-        lo     = self.robot.data.soft_joint_pos_limits[0, :, 0]
-        hi     = self.robot.data.soft_joint_pos_limits[0, :, 1]
-        below  = (lo - jpos).clamp(min=0.0)  # how far below lower limit
-        above  = (jpos - hi).clamp(min=0.0)  # how far above upper limit
-        out    = (below.pow(2) + above.pow(2)).sum(dim=-1)  # sum of squared violations
-        rew_limits = cfg.rew_joint_pos_limits * out
+        # Joint mirror (diagonal symmetry: FR↔RL, FL↔RR)
+        # FR=idx[3:6], RL=idx[6:9], FL=idx[0:3], RR=idx[9:12]
+        mirror_err = (jpos[:, 3:6] - jpos[:, 6:9]).pow(2).sum(dim=-1) + \
+                     (jpos[:, 0:3] - jpos[:, 9:12]).pow(2).sum(dim=-1)
+        rew_mirror = cfg.rew_joint_mirror * mirror_err
 
-        # 16. Imitation (keeps style reward grounded in reference motion)
-        with torch.no_grad():
-            times = (self.episode_length_buf * self.step_dt).cpu().numpy()
-            ref_dof_pos, ref_dof_vel, _, _, _, _ = self._motion_loader.sample(
-                num_samples=self.num_envs, times=times
-            )
-        ref_jp = ref_dof_pos[:, self.motion_dof_indexes]
-        ref_jv = ref_dof_vel[:, self.motion_dof_indexes]
-        rew_imit_jp = cfg.rew_imitation_joint_pos * torch.exp(
-            -jpos.sub(ref_jp).pow(2).sum(dim=-1) / cfg.imitation_sigma_joint_pos
-        )
-        rew_imit_jv = cfg.rew_imitation_joint_vel * torch.exp(
-            -self.robot.data.joint_vel.sub(ref_jv).pow(2).sum(dim=-1) / cfg.imitation_sigma_joint_vel
-        )
+        # Joint limits (continuous)
+        lo = self.robot.data.soft_joint_pos_limits[0, :, 0]
+        hi = self.robot.data.soft_joint_pos_limits[0, :, 1]
+        below = (lo - jpos).clamp(min=0.0)
+        above = (jpos - hi).clamp(min=0.0)
+        rew_limits = cfg.rew_joint_pos_limits * (below.pow(2) + above.pow(2)).sum(dim=-1)
 
-        # 17. Termination penalty
+        # ── Termination penalty ───────────────────────────────────────────────
         base_height = root_pos_w[:, 2] - self.scene.env_origins[:, 2]
         rew_term = cfg.rew_termination * (base_height < cfg.termination_height).float()
 
-        # Cache for next step
+        # Cache
         self.last_actions.copy_(self.actions)
-        self.last_joint_vel.copy_(self.robot.data.joint_vel)
+        self.last_joint_vel.copy_(jvel)
 
-        # Multiply by step_dt to match robot_lab RewardManager: value = weight * dt * func()
-        # This keeps value function estimates at the same scale as robot_lab
+        # ── Total (dt-scaled, match robot_lab RewardManager) ──────────────────
         dt = self.step_dt
         total = dt * (
             rew_track_lin + rew_track_ang
             + rew_upward + rew_lin_vel_z + rew_ang_vel_xy
-            + rew_base_height + rew_flat_orient + rew_feet_height
-            + rew_air_time + rew_air_var + rew_gait + rew_slide
-            + rew_stand + rew_no_cmd
-            + rew_undesired + rew_cf
-            + rew_action_rate + rew_torques + rew_joint_acc + rew_limits
-            + rew_imit_jp + rew_imit_jv
+            + rew_feet_hb + rew_air_time + rew_air_var + rew_gait + rew_slide
+            + rew_stand + rew_no_cmd + rew_undesired + rew_cf
+            + rew_action_rate + rew_torques + rew_joint_acc
+            + rew_power + rew_pos_pen + rew_mirror + rew_limits
         ) + rew_term
 
-        # Per-term breakdown for logging (per-step mean, matching robot_lab Episode_Reward format)
         self.extras["reward_terms"] = {
             "track_lin_vel":  rew_track_lin.mean().item(),
             "track_ang_vel":  rew_track_ang.mean().item(),
             "upward":         rew_upward.mean().item(),
             "lin_vel_z":      rew_lin_vel_z.mean().item(),
             "ang_vel_xy":     rew_ang_vel_xy.mean().item(),
-            "base_height":    rew_base_height.mean().item(),
-            "flat_orient":    rew_flat_orient.mean().item(),
-            "feet_swing_h":   rew_feet_height.mean().item(),
+            "feet_height_b":  rew_feet_hb.mean().item(),
             "feet_air_time":  rew_air_time.mean().item(),
             "feet_air_var":   rew_air_var.mean().item(),
             "feet_gait":      rew_gait.mean().item(),
@@ -407,9 +350,10 @@ class OrixAmpEnv(DirectRLEnv):
             "action_rate":    rew_action_rate.mean().item(),
             "joint_torques":  rew_torques.mean().item(),
             "joint_acc":      rew_joint_acc.mean().item(),
+            "joint_power":    rew_power.mean().item(),
+            "joint_pos_pen":  rew_pos_pen.mean().item(),
+            "joint_mirror":   rew_mirror.mean().item(),
             "joint_limits":   rew_limits.mean().item(),
-            "imitation_jp":   rew_imit_jp.mean().item(),
-            "imitation_jv":   rew_imit_jv.mean().item(),
             "termination":    rew_term.mean().item(),
         }
         return total
@@ -475,25 +419,33 @@ class OrixAmpEnv(DirectRLEnv):
     # ── AMP reference sampling ────────────────────────────────────────────────
 
     def collect_reference_motions(self, num_samples: int) -> torch.Tensor:
-        """Sample AMP obs from reference motion (40D, matches env amp_obs)."""
+        """Sample AMP obs from reference motion (30D, matches env amp_obs).
+
+        Format: joint_pos_rel(12) + joint_vel(12) + proj_gravity(3) + base_ang_vel(3)
+        """
+        cfg = self.cfg
         times = np.random.uniform(0, self._motion_loader.duration, num_samples)
-        dof_pos, dof_vel, body_pos, body_rot, _, _ = self._motion_loader.sample(
-            num_samples=num_samples, times=times
-        )
-        ref_jp   = dof_pos[:, self.motion_dof_indexes]
-        ref_jv   = dof_vel[:, self.motion_dof_indexes]
-        ref_rpos = body_pos[:, self.motion_ref_body_index]   # (N,3)
-        ref_rquat= body_rot[:, self.motion_ref_body_index]   # (N,4)
+        dof_pos, dof_vel, body_pos, body_rot, body_lin_vel, body_ang_vel = \
+            self._motion_loader.sample(num_samples=num_samples, times=times)
 
-        base_height = ref_rpos[:, 2:3]                        # (N,1)
-        gravity_w   = torch.tensor([0., 0., -1.], device=self.device).expand(num_samples, 3)
-        proj_grav   = _quat_rotate_inverse(ref_rquat, gravity_w)  # (N,3)
+        ref_jp  = dof_pos[:, self.motion_dof_indexes]
+        ref_jv  = dof_vel[:, self.motion_dof_indexes]
+        ref_rquat = body_rot[:, self.motion_ref_body_index]  # (N, 4)
 
-        if self.motion_key_body_indexes:
-            ref_key = (
-                body_pos[:, self.motion_key_body_indexes] - ref_rpos.unsqueeze(1)
-            ).reshape(num_samples, -1)
-        else:
-            ref_key = torch.zeros(num_samples, 12, device=self.device)
+        # joint_pos relative to default
+        ref_jp_rel = ref_jp - self.action_offset
 
-        return torch.cat([ref_jp, ref_jv, base_height, proj_grav, ref_key], dim=-1)  # 40
+        # projected gravity from reference quaternion
+        gravity_w = torch.tensor([0., 0., -1.], device=self.device).expand(num_samples, 3)
+        proj_grav = _quat_rotate_inverse(ref_rquat, gravity_w)
+
+        # base angular velocity in body frame
+        ref_ang_vel_w = body_ang_vel[:, self.motion_ref_body_index]
+        ref_ang_vel_b = _quat_rotate_inverse(ref_rquat, ref_ang_vel_w)
+
+        return torch.cat([
+            ref_jp_rel * cfg.obs_scale_joint_pos,   # 12
+            ref_jv     * cfg.obs_scale_joint_vel,    # 12
+            proj_grav,                               #  3
+            ref_ang_vel_b * cfg.obs_scale_ang_vel,   #  3
+        ], dim=-1)  # 30

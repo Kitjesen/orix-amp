@@ -71,15 +71,20 @@ ORIX_DOG_CFG = ArticulationCfg(
 class OrixAmpEnvCfg(DirectRLEnvCfg):
     """Orix Dog AMP environment config."""
 
-    # ── Obs / action spaces ───────────────────────────────────────────────────
-    # actor: joint_pos(12)+joint_vel(12)+height(1)+proj_grav(3)+key_body(12)+cmd(3)+progress(1) = 44
-    # critic: actor(44)+base_lin_vel(3)+feet_contact(4)+height_scan(25) = 76
-    # AMP: single frame, no cmd/progress = 40
-    observation_space = 44
+    # ── Obs / action spaces (aligned with robot_lab) ────────────────────────
+    # actor (45D): base_ang_vel(3) + proj_gravity(3) + cmd(3) + joint_pos(12) + joint_vel(12) + last_actions(12)
+    # critic (48D): actor(45) + base_lin_vel(3)
+    # AMP (30D): joint_pos(12) + joint_vel(12) + proj_gravity(3) + base_ang_vel(3)
+    observation_space = 45   # actor
     action_space      = 12
-    state_space       = 76
-    num_amp_observations  = 1   # single frame — prevents discriminator exploiting temporal artifacts
-    amp_observation_space = 40
+    state_space       = 48   # critic = actor + privileged
+    num_amp_observations  = 1
+    amp_observation_space = 30
+
+    # Observation scales (match robot_lab)
+    obs_scale_ang_vel:   float = 0.25
+    obs_scale_joint_pos: float = 1.0
+    obs_scale_joint_vel: float = 0.05
 
     # ── Env timing ────────────────────────────────────────────────────────────
     episode_length_s = 20.0    # 20s × 50Hz = 1000 steps (matches robot_lab)
@@ -100,45 +105,45 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     reference_body = "base_link"
     reset_strategy = "random-start"
 
-    # ── Reward weights ────────────────────────────────────────────────────────
-    # Velocity tracking (task)
+    # ── Reward weights (aligned with robot_lab orix_dog) ─────────────────────
+    # Velocity tracking
     rew_track_lin_vel_xy: float = 6.0
     rew_track_ang_vel_z:  float = 3.0
     track_vel_sigma:      float = 0.25
 
     # Posture / stability
     rew_upward:              float =  1.0
-    rew_lin_vel_z_l2:        float = -2.0     # penalise vertical base velocity
-    rew_ang_vel_xy_l2:       float = -0.05    # penalise roll/pitch rate
-    rew_base_height_l2:      float = -5.0     # penalise deviation from target height
-    base_height_target:      float =  0.21    # FK: thigh=0.3, calf=1.1 → standing 0.21m
-    rew_flat_orientation_l2: float = -2.0     # penalise body tilt (roll/pitch)
-    rew_feet_height:         float = -1.0      # penalise swing foot deviation from target height
-    feet_height_target:      float =  0.05    # target swing foot height (m above ground)
-    feet_height_tanh_mult:   float =  5.0     # tanh scaling for foot horizontal velocity
+    rew_lin_vel_z_l2:        float = -2.0
+    rew_ang_vel_xy_l2:       float = -0.05
 
-    # Foot behaviour — gait phase is critical
-    rew_feet_air_time:          float =  0.5
-    feet_air_time_threshold:    float =  0.1   # trot swing phase ~0.15s, threshold below that
-    rew_feet_air_time_variance: float = -1.5
-    rew_feet_gait:              float =  1.0   # diagonal sync emphasis
-    rew_feet_slide:             float = -0.15
+    # Foot behaviour (match robot_lab)
+    rew_feet_air_time:          float =  0.3
+    feet_air_time_threshold:    float =  0.1
+    rew_feet_air_time_variance: float = -1.0
+    rew_feet_gait:              float =  0.5
+    rew_feet_slide:             float = -0.1
     rew_feet_contact_no_cmd:    float =  0.1
+    rew_feet_height_body:       float = -1.0     # penalise feet too high relative to body
+    feet_height_body_target:    float = -0.2
+    feet_height_body_tanh_mult: float =  5.0
 
-    # Regularisation
-    rew_action_rate_l2:   float = -0.01
-    rew_joint_torques_l2: float = -2.5e-5
-    rew_joint_acc_l2:     float = -2.5e-7
-    rew_joint_pos_limits: float = -2.0
-    rew_stand_still:      float = -0.5
+    # Regularisation (match robot_lab)
+    rew_action_rate_l2:    float = -0.01
+    rew_joint_torques_l2:  float = -2.5e-5
+    rew_joint_acc_l2:      float = -2.5e-7
+    rew_joint_pos_limits:  float = -5.0
+    rew_joint_power:       float = -2e-5
+    rew_joint_pos_penalty: float = -1.0
+    rew_joint_mirror:      float = -0.05
+    rew_stand_still:       float = -2.0
 
     # Contact penalties
     rew_undesired_contacts: float = -1.0
     rew_contact_forces:     float = -1.5e-4
 
-    # Imitation (AMP task reward component)
-    rew_imitation_joint_pos: float = 1.0   # scaled down — velocity tracking is primary
-    rew_imitation_joint_vel: float = 0.3
+    # Imitation (for AMP mode, off in pure PPO)
+    rew_imitation_joint_pos: float = 0.0
+    rew_imitation_joint_vel: float = 0.0
     imitation_sigma_joint_pos: float = 1.5
     imitation_sigma_joint_vel: float = 8.0
 
