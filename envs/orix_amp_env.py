@@ -269,17 +269,17 @@ class OrixAmpEnv(DirectRLEnv):
         self._resolve_contact_indexes()
         cf_idx = self._foot_cf_indexes
 
-        # 3d. Feet swing height — reward feet reaching target height during swing
+        # 3d. Feet swing height — penalise deviation from target (robot_lab style)
+        # Only penalise when foot is moving horizontally (swing phase)
         feet_pos_z = self.robot.data.body_pos_w[:, self.foot_body_indexes, 2]  # (N, 4)
         ground_z   = self.scene.env_origins[:, 2:3]  # (N, 1)
-        feet_height_above_ground = feet_pos_z - ground_z  # (N, 4)
-        # Only reward swing feet (not in contact) reaching target height
-        if cf_idx and self.contact_sensor.data.net_forces_w is not None:
-            in_swing = (self.contact_sensor.data.net_forces_w[:, cf_idx, 2].abs() < 1.0).float()
-        else:
-            in_swing = torch.ones(self.num_envs, 4, device=self.device)
-        height_reward = torch.clamp(feet_height_above_ground - cfg.feet_height_target, min=0.0)
-        rew_feet_height = cfg.rew_feet_height * (height_reward * in_swing).sum(dim=-1)
+        foot_z_err = (feet_pos_z - ground_z - cfg.feet_height_target).pow(2)  # (N, 4)
+        foot_xy_vel = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2]  # (N, 4, 2)
+        foot_speed  = foot_xy_vel.norm(dim=-1)  # (N, 4)
+        vel_weight  = torch.tanh(cfg.feet_height_tanh_mult * foot_speed)  # 0~1, active when moving
+        rew_feet_height = cfg.rew_feet_height * (foot_z_err * vel_weight).sum(dim=-1)
+        # Zero reward when command ≈ 0
+        rew_feet_height *= (~cmd_zero).float()
 
         # 4. Feet air time (reward symmetric swing)
         air_time = torch.zeros(self.num_envs, 4, device=self.device)

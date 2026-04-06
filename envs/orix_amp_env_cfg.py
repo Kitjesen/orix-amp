@@ -113,12 +113,13 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     rew_base_height_l2:      float = -5.0     # penalise deviation from target height
     base_height_target:      float =  0.21    # FK: thigh=0.3, calf=1.1 → standing 0.21m
     rew_flat_orientation_l2: float = -2.0     # penalise body tilt (roll/pitch)
-    rew_feet_height:         float =  1.0      # reward feet reaching swing height target
+    rew_feet_height:         float = -1.0      # penalise swing foot deviation from target height
     feet_height_target:      float =  0.05    # target swing foot height (m above ground)
+    feet_height_tanh_mult:   float =  5.0     # tanh scaling for foot horizontal velocity
 
     # Foot behaviour — gait phase is critical
     rew_feet_air_time:          float =  0.5
-    feet_air_time_threshold:    float =  0.3   # shorter for small robot
+    feet_air_time_threshold:    float =  0.1   # trot swing phase ~0.15s, threshold below that
     rew_feet_air_time_variance: float = -1.5
     rew_feet_gait:              float =  1.0   # diagonal sync emphasis
     rew_feet_slide:             float = -0.15
