@@ -103,7 +103,7 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     # ── Motion reference ──────────────────────────────────────────────────────
     motion_file    = os.path.join(MOTIONS_DIR, "orix_trot_medium_30.npz")
     reference_body = "base_link"
-    reset_strategy = "random-start"
+    reset_strategy = "default"   # default pose + random perturbation (match robot_lab)
 
     # ── Reward weights (aligned with robot_lab orix_dog) ─────────────────────
     # Velocity tracking
@@ -147,8 +147,8 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     imitation_sigma_joint_pos: float = 1.5
     imitation_sigma_joint_vel: float = 8.0
 
-    # Termination penalty
-    rew_termination: float = -10.0
+    # Termination penalty (disabled since early_termination=False, robot_lab sets illegal_contact=None)
+    rew_termination: float = 0.0
 
     # ── Simulation ────────────────────────────────────────────────────────────
     sim: SimulationCfg = SimulationCfg(
