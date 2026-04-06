@@ -252,6 +252,21 @@ class OrixAmpEnv(DirectRLEnv):
         rew_lin_vel_z  = cfg.rew_lin_vel_z_l2  * self.robot.data.root_lin_vel_w[:, 2].pow(2)
         rew_ang_vel_xy = cfg.rew_ang_vel_xy_l2 * base_ang_vel_b[:, :2].pow(2).sum(dim=-1)
 
+        # 3b. Base height tracking — prevents body going too high or too low
+        base_height = root_pos_w[:, 2] - self.scene.env_origins[:, 2]
+        rew_base_height = cfg.rew_base_height_l2 * (base_height - cfg.base_height_target).pow(2)
+
+        # 3c. Flat orientation — penalise body tilt (roll/pitch via projected gravity)
+        # proj_gravity_b[2] = -1 when perfectly upright, deviation from -1 = tilt
+        rew_flat_orient = cfg.rew_flat_orientation_l2 * (proj_gravity_b[:, :2].pow(2).sum(dim=-1))
+
+        # 3d. Feet height relative to body — prevent high-stepping
+        feet_pos_z = self.robot.data.body_pos_w[:, self.foot_body_indexes, 2]  # (N, 4)
+        body_z = root_pos_w[:, 2:3]  # (N, 1)
+        feet_rel_z = feet_pos_z - body_z  # negative = below body
+        feet_above_target = (feet_rel_z - cfg.feet_height_body_target).clamp(min=0.0)
+        rew_feet_height = cfg.rew_feet_height_body * feet_above_target.pow(2).sum(dim=-1)
+
         # Resolve contact sensor indexes lazily
         self._resolve_contact_indexes()
         cf_idx = self._foot_cf_indexes  # contact sensor indexes for feet
@@ -356,12 +371,13 @@ class OrixAmpEnv(DirectRLEnv):
         total = dt * (
             rew_track_lin + rew_track_ang
             + rew_upward + rew_lin_vel_z + rew_ang_vel_xy
+            + rew_base_height + rew_flat_orient + rew_feet_height
             + rew_air_time + rew_air_var + rew_gait + rew_slide
             + rew_stand + rew_no_cmd
             + rew_undesired + rew_cf
             + rew_action_rate + rew_torques + rew_joint_acc + rew_limits
             + rew_imit_jp + rew_imit_jv
-        ) + rew_term  # termination not time-scaled (binary event)
+        ) + rew_term
 
         # Per-term breakdown for logging (per-step mean, matching robot_lab Episode_Reward format)
         self.extras["reward_terms"] = {
@@ -370,6 +386,9 @@ class OrixAmpEnv(DirectRLEnv):
             "upward":         rew_upward.mean().item(),
             "lin_vel_z":      rew_lin_vel_z.mean().item(),
             "ang_vel_xy":     rew_ang_vel_xy.mean().item(),
+            "base_height":    rew_base_height.mean().item(),
+            "flat_orient":    rew_flat_orient.mean().item(),
+            "feet_height":    rew_feet_height.mean().item(),
             "feet_air_time":  rew_air_time.mean().item(),
             "feet_air_var":   rew_air_var.mean().item(),
             "feet_gait":      rew_gait.mean().item(),

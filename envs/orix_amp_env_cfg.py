@@ -116,9 +116,14 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     track_vel_sigma:      float = 0.25
 
     # Posture / stability
-    rew_upward:         float =  1.0
-    rew_lin_vel_z_l2:   float = -2.0     # penalise vertical base velocity
-    rew_ang_vel_xy_l2:  float = -0.05    # penalise roll/pitch rate
+    rew_upward:              float =  1.0
+    rew_lin_vel_z_l2:        float = -2.0     # penalise vertical base velocity
+    rew_ang_vel_xy_l2:       float = -0.05    # penalise roll/pitch rate
+    rew_base_height_l2:      float = -5.0     # penalise deviation from target height
+    base_height_target:      float =  0.21    # FK: thigh=0.3, calf=1.1 → standing 0.21m
+    rew_flat_orientation_l2: float = -2.0     # penalise body tilt (roll/pitch)
+    rew_feet_height_body:    float = -1.0     # penalise feet too high relative to body
+    feet_height_body_target: float = -0.2     # feet should be ~0.2m below body
 
     # Foot behaviour — gait phase is critical
     rew_feet_air_time:          float =  0.5
