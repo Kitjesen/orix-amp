@@ -1,112 +1,93 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Inovxio
-# SPDX-License-Identifier: Apache-2.0
-"""Orix Dog AMP Training — self-contained, no external RL libraries.
-
-Dependencies: isaaclab, torch, gymnasium only.
+"""Orix Dog training — uses robot_lab ManagerBasedRLEnv.
 
 Usage:
-    python scripts/train_amp.py --num_envs 4096 --headless
-    python scripts/train_amp.py --num_envs 4096 --headless --resume logs/orix_amp/model_500.pt
+    # Standard PPO (flat terrain)
+    python scripts/train_amp.py --task RobotLab-Isaac-Velocity-Flat-OrixDog-v0 --num_envs 4096 --headless
+
+    # Rough terrain
+    python scripts/train_amp.py --task RobotLab-Isaac-Velocity-Rough-OrixDog-v0 --num_envs 4096 --headless
+
+Requires robot_lab to be installed or on PYTHONPATH.
 """
 import argparse
 import os
 import sys
 
-# ── Isaac Sim must be launched BEFORE any isaaclab imports ──
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Orix Dog AMP — self-contained training")
-parser.add_argument("--num_envs",       type=int,   default=4096)
-parser.add_argument("--max_iterations", type=int,   default=10000)
-parser.add_argument("--resume",         type=str,   default=None,
-                    help="Path to checkpoint to resume from")
-parser.add_argument("--log_dir",        type=str,   default=None,
-                    help="Override log directory")
-parser.add_argument("--motion_file",    type=str,   default=None,
-                    help="Override motion .npz file path")
-parser.add_argument("--task_lerp",      type=float, default=0.3,
-                    help="Task reward weight (0=pure style, 1=pure task)")
-parser.add_argument("--seed",           type=int,   default=42)
+parser = argparse.ArgumentParser(description="Train Orix Dog with robot_lab env")
+parser.add_argument("--task", type=str, default="RobotLab-Isaac-Velocity-Flat-OrixDog-v0")
+parser.add_argument("--num_envs", type=int, default=4096)
+parser.add_argument("--max_iterations", type=int, default=20000)
+parser.add_argument("--resume", type=str, default=None)
+parser.add_argument("--seed", type=int, default=42)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
-app_launcher   = AppLauncher(args)
+app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
 
-# ── Post-launch imports ──
+# ── Post-launch imports ──────────────────────────────────────────────────────
+import gymnasium as gym
 import torch
-from datetime import datetime
 
-# Add repo root to path so `envs` and `amp` packages are importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import robot_lab.tasks  # noqa: register robot_lab envs
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 
-from envs.orix_amp_env import OrixAmpEnv
-from envs.orix_amp_env_cfg import OrixAmpEnvCfg
-from amp.trainer import AMPTrainer, AMPConfig
+from rsl_rl.runners import OnPolicyRunner
 
 
-def main() -> None:
+def main():
     torch.manual_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ── Build env config ──
-    env_cfg = OrixAmpEnvCfg()
-    env_cfg.scene.num_envs = args.num_envs
-    if args.motion_file:
-        env_cfg.motion_file = args.motion_file
+    # Create env
+    env = gym.make(args.task, cfg=None if args.num_envs is None else None)
+    # gym.make with robot_lab auto-configures the env via entry_point
+    # Override num_envs if specified
+    if args.num_envs:
+        env_cfg = env.unwrapped.cfg
+        env_cfg.scene.num_envs = args.num_envs
+        env.close()
+        env = gym.make(args.task, cfg=env_cfg)
 
-    # ── Create env ──
-    env = OrixAmpEnv(cfg=env_cfg)
+    env = RslRlVecEnvWrapper(env)
 
-    # ── Build training config ──
-    log_dir = args.log_dir or os.path.join(
-        os.path.dirname(__file__), "..", "logs", "orix_amp",
-        datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+    # Load agent config from task registry
+    agent_cfg_entry = gym.spec(args.task).kwargs.get("rsl_rl_cfg_entry_point")
+    if agent_cfg_entry:
+        from importlib import import_module
+        mod_name, cls_name = agent_cfg_entry.rsplit(":", 1)
+        agent_cfg = getattr(import_module(mod_name), cls_name)()
+    else:
+        # Fallback default
+        agent_cfg = RslRlOnPolicyRunnerCfg()
+
+    agent_cfg.max_iterations = args.max_iterations
+
+    log_dir = os.path.join(
+        os.path.dirname(__file__), "..", "logs", "rsl_rl",
+        args.task.replace("-", "_"),
     )
+    os.makedirs(log_dir, exist_ok=True)
 
-    cfg = AMPConfig(
-        # PPO
-        num_steps_per_env    = 24,
-        num_learning_epochs  = 5,
-        num_mini_batches     = 4,
-        clip_param           = 0.2,
-        value_loss_coef      = 1.0,
-        entropy_coef         = 0.01,
-        learning_rate        = 1e-3,
-        max_grad_norm        = 1.0,
-        gamma                = 0.99,
-        lam                  = 0.95,
-        desired_kl           = 0.01,
-        use_clipped_value_loss = True,
-        # AMP
-        task_reward_lerp     = args.task_lerp,
-        amp_replay_buffer_size = 1_000_000,
-        amp_expert_preload   = 200_000,
-        amp_batch_size       = 512,
-        num_disc_updates     = 3,        # was 5 — slow down discriminator
-        disc_grad_penalty    = 50.0,     # was 10 — strong regularization
-        disc_reward_scale    = 2.0,
-        disc_learning_rate   = 5e-5,     # was 1e-4 — slower disc learning
-        # Networks
-        actor_hidden  = [512, 256, 128],
-        critic_hidden = [512, 256, 128],
-        disc_hidden   = [256, 128],      # was [1024, 512] — prevent disc overfitting
-        init_noise_std = 0.5,            # was 1.0
-        # I/O
-        save_interval = 500,
-        log_dir       = log_dir,
+    runner = OnPolicyRunner(
+        env=env,
+        train_cfg=agent_cfg.to_dict(),
+        log_dir=log_dir,
+        device=str(env.unwrapped.device),
     )
-
-    # ── Create trainer ──
-    trainer = AMPTrainer(env=env, cfg=cfg, device=device)
 
     if args.resume:
-        trainer.load(args.resume)
+        runner.load(args.resume)
 
-    # ── Train ──
-    trainer.train(num_iterations=args.max_iterations)
+    print(f"\n=== Orix Dog Training ===")
+    print(f"  Task: {args.task}")
+    print(f"  Envs: {env.num_envs}  Iter: {args.max_iterations}")
+    print(f"  Log:  {log_dir}\n")
 
+    runner.learn(num_learning_iterations=args.max_iterations, init_at_random_ep_len=True)
     env.close()
     simulation_app.close()
 

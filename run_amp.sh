@@ -1,29 +1,30 @@
 #!/bin/bash
-# Orix Dog AMP launcher
+# Orix Dog training — uses robot_lab ManagerBasedRLEnv
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GPU="${GPU:-4}"
 NUM_ENVS="${NUM_ENVS:-4096}"
-MAX_ITER="${MAX_ITER:-10000}"
-TASK_LERP="${TASK_LERP:-1.0}"  # 1.0 = pure task reward, no AMP style
+MAX_ITER="${MAX_ITER:-20000}"
+TASK="${TASK:-RobotLab-Isaac-Velocity-Flat-OrixDog-v0}"
 
-echo "=== Orix AMP (self-contained) ==="
-echo "  GPU=$GPU  num_envs=$NUM_ENVS  max_iter=$MAX_ITER  task_lerp=$TASK_LERP"
+echo "=== Orix Dog Training (robot_lab) ==="
+echo "  GPU=$GPU  task=$TASK  num_envs=$NUM_ENVS  max_iter=$MAX_ITER"
 
-# Self-contained: only needs isaaclab (thunder2) — no robot_lab, no TienKung
-export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
+source /home/bsrl/miniconda3/etc/profile.d/conda.sh
+conda activate thunder2
 
-# Resolve URDF mesh paths: package://orix_dog/meshes/*.STL
+# robot_lab source must be on PYTHONPATH
+ROBOT_LAB_SRC="/home/bsrl/hongsenpang/RLbased/robot_lab/source/robot_lab"
+export PYTHONPATH="$ROBOT_LAB_SRC:$SCRIPT_DIR:${PYTHONPATH:-}"
+
+# URDF mesh paths
 ln -sf "$SCRIPT_DIR/urdf" "$SCRIPT_DIR/orix_dog" 2>/dev/null
 export ROS_PACKAGE_PATH="$SCRIPT_DIR:${ROS_PACKAGE_PATH:-}"
 
 mkdir -p "$SCRIPT_DIR/logs"
-LOG="$SCRIPT_DIR/logs/amp_$(date +%Y%m%d_%H%M%S).log"
+LOG="$SCRIPT_DIR/logs/train_$(date +%Y%m%d_%H%M%S).log"
 echo "  log: $LOG"
-
-source /home/bsrl/miniconda3/etc/profile.d/conda.sh
-conda activate thunder2
 
 RESUME_ARG=""
 if [ -n "$RESUME" ]; then
@@ -33,9 +34,9 @@ fi
 
 nohup env CUDA_VISIBLE_DEVICES=$GPU \
     python "$SCRIPT_DIR/scripts/train_amp.py" \
+    --task $TASK \
     --num_envs $NUM_ENVS \
     --max_iterations $MAX_ITER \
-    --task_lerp $TASK_LERP \
     $RESUME_ARG \
     --headless \
     > "$LOG" 2>&1 &
