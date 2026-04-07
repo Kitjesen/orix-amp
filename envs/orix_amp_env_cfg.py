@@ -92,8 +92,8 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     dt               = 0.005  # 5ms physics dt (matches robot_lab sim.dt)
 
     # ── Termination ───────────────────────────────────────────────────────────
-    early_termination  = False  # disabled — let upward/base_height rewards handle posture
-    termination_height = 0.15
+    early_termination  = True
+    termination_height = 0.10   # low threshold — only terminate when truly fallen
 
     # ── Velocity command ranges (conservative for small robot, learn to walk first) ──
     cmd_lin_vel_x_range: tuple = (-0.5, 0.5)   # m/s
