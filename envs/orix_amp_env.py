@@ -236,9 +236,13 @@ class OrixAmpEnv(DirectRLEnv):
         proj_gravity_b = _quat_rotate_inverse(
             root_quat_w, torch.tensor([0., 0., -1.], device=self.device).expand(self.num_envs, 3)
         )
-        rew_upward     = cfg.rew_upward * torch.clamp(-proj_gravity_b[:, 2], 0.0, 1.0)
+        # robot_lab: (1 - proj_gravity_b[2])^2  — direct copy
+        rew_upward     = cfg.rew_upward * (1.0 - proj_gravity_b[:, 2]).pow(2)
         rew_lin_vel_z  = cfg.rew_lin_vel_z_l2  * self.robot.data.root_lin_vel_w[:, 2].pow(2)
         rew_ang_vel_xy = cfg.rew_ang_vel_xy_l2 * base_ang_vel_b[:, :2].pow(2).sum(dim=-1)
+
+        # gravity clamp factor used by several rewards (robot_lab pattern)
+        grav_clamp = torch.clamp(-proj_gravity_b[:, 2], 0.0, 0.7) / 0.7
 
         # ── Feet height body (robot_lab style) ────────────────────────────────
         feet_pos_body = (
@@ -253,16 +257,24 @@ class OrixAmpEnv(DirectRLEnv):
         rew_feet_hb = cfg.rew_feet_height_body * (foot_z_err * vel_weight).sum(dim=-1)
         rew_feet_hb *= (~cmd_zero).float()
 
-        # ── Feet air time ─────────────────────────────────────────────────────
-        air_time = torch.zeros(self.num_envs, 4, device=self.device)
-        if cf_idx and self.contact_sensor.data.current_air_time is not None:
-            try:
-                air_time = self.contact_sensor.data.current_air_time[:, cf_idx]
-            except IndexError:
-                pass
-        at_threshold = (air_time - cfg.feet_air_time_threshold).clamp(min=0.0)
-        rew_air_time = cfg.rew_feet_air_time * at_threshold.sum(dim=-1) * (~cmd_zero).float()
-        rew_air_var  = cfg.rew_feet_air_time_variance * air_time.var(dim=-1)
+        # ── Feet air time (robot_lab: only on first contact, uses last_air_time) ──
+        rew_air_time = torch.zeros(self.num_envs, device=self.device)
+        rew_air_var  = torch.zeros(self.num_envs, device=self.device)
+        if cf_idx:
+            first_contact = self.contact_sensor.compute_first_contact(self.step_dt)[:, cf_idx]
+            last_air = self.contact_sensor.data.last_air_time[:, cf_idx]
+            last_contact = self.contact_sensor.data.last_contact_time[:, cf_idx]
+            cmd_norm = self.commands.norm(dim=-1) > 0.1
+            rew_air_time = cfg.rew_feet_air_time * (
+                ((last_air - cfg.feet_air_time_threshold) * first_contact.float()).sum(dim=-1)
+                * cmd_norm.float() * grav_clamp
+            )
+            # variance penalty: var(last_air) + var(last_contact), clamped at 0.5
+            air_clipped = last_air.clamp(max=0.5)
+            con_clipped = last_contact.clamp(max=0.5)
+            rew_air_var = cfg.rew_feet_air_time_variance * (
+                (air_clipped.var(dim=-1) + con_clipped.var(dim=-1)) * grav_clamp
+            )
 
         # ── Feet gait (diagonal sync) ────────────────────────────────────────
         rew_gait = torch.zeros(self.num_envs, device=self.device)
@@ -271,14 +283,24 @@ class OrixAmpEnv(DirectRLEnv):
                        + contact_bool[:, 1].float() * contact_bool[:, 2].float()) * 0.5
             rew_gait = cfg.rew_feet_gait * gait_sync
 
-        # ── Feet slide ────────────────────────────────────────────────────────
+        # ── Feet slide (robot_lab: body-frame foot lateral velocity × contact) ───
         rew_slide = torch.zeros(self.num_envs, device=self.device)
         if cf_idx:
-            foot_speed = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes, :2].norm(dim=-1)
-            rew_slide = cfg.rew_feet_slide * (foot_speed * contact_bool.float()).sum(dim=-1)
+            # Foot velocity relative to root, transformed to body frame
+            foot_vel_w = self.robot.data.body_lin_vel_w[:, self.foot_body_indexes]      # (N,4,3)
+            root_lin_vel_w = self.robot.data.root_lin_vel_w.unsqueeze(1)                # (N,1,3)
+            foot_vel_rel_w = foot_vel_w - root_lin_vel_w                                # (N,4,3)
+            foot_vel_b = torch.stack(
+                [_quat_rotate_inverse(root_quat_w, foot_vel_rel_w[:, i]) for i in range(4)],
+                dim=1
+            )                                                                            # (N,4,3)
+            foot_lateral = foot_vel_b[:, :, :2].norm(dim=-1)                             # (N,4)
+            rew_slide = cfg.rew_feet_slide * (foot_lateral * contact_bool.float()).sum(dim=-1)
 
-        # ── Stand still / contact without cmd ─────────────────────────────────
-        rew_stand  = cfg.rew_stand_still * cmd_zero.float() * jvel.pow(2).sum(dim=-1)
+        # ── Stand still (robot_lab: joint_deviation_l1 × cmd_small × grav_clamp) ──
+        joint_dev_l1 = (jpos - self.action_offset).abs().sum(dim=-1)
+        cmd_small = (self.commands.norm(dim=-1) < 0.06).float()
+        rew_stand = cfg.rew_stand_still * joint_dev_l1 * cmd_small * grav_clamp
         rew_no_cmd = cfg.rew_feet_contact_no_cmd * cmd_zero.float()
 
         # ── Contacts ──────────────────────────────────────────────────────────
@@ -300,13 +322,20 @@ class OrixAmpEnv(DirectRLEnv):
         # Joint power = torque × velocity
         rew_power = cfg.rew_joint_power * (self.robot.data.applied_torque * jvel).abs().sum(dim=-1)
 
-        # Joint position penalty (deviation from default)
-        rew_pos_pen = cfg.rew_joint_pos_penalty * (jpos - self.action_offset).pow(2).sum(dim=-1)
+        # Joint position penalty (robot_lab: norm of deviation, scale up when standing still)
+        # robot_lab uses norm (L2), not squared sum, and scales by stand_still_scale when stationary
+        running_pen = (jpos - self.action_offset).norm(dim=-1)
+        body_vel = self.robot.data.root_lin_vel_w[:, :2].norm(dim=-1)
+        is_running = (self.commands.norm(dim=-1) > 0.06) | (body_vel > 0.5)
+        # robot_lab uses stand_still_scale=5.0 to amplify when stationary
+        scale = torch.where(is_running, torch.ones_like(running_pen), 5.0 * torch.ones_like(running_pen))
+        rew_pos_pen = cfg.rew_joint_pos_penalty * scale * running_pen
 
-        # Joint mirror (diagonal symmetry: FR↔RL, FL↔RR)
-        # FR=idx[3:6], RL=idx[6:9], FL=idx[0:3], RR=idx[9:12]
-        mirror_err = (jpos[:, 3:6] - jpos[:, 6:9]).pow(2).sum(dim=-1) + \
-                     (jpos[:, 0:3] - jpos[:, 9:12]).pow(2).sum(dim=-1)
+        # Joint mirror (robot_lab: (joint_a + joint_b)^2, sum=0 when mirrored)
+        # robot_lab pairs: [FR, RL] and [FL, RR]
+        # Joint order in robot: FL(0-2), FR(3-5), RL(6-8), RR(9-11)
+        mirror_err = (jpos[:, 3:6] + jpos[:, 6:9]).pow(2).sum(dim=-1) + \
+                     (jpos[:, 0:3] + jpos[:, 9:12]).pow(2).sum(dim=-1)
         rew_mirror = cfg.rew_joint_mirror * mirror_err
 
         # Joint limits (continuous)
