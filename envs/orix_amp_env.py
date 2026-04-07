@@ -276,12 +276,38 @@ class OrixAmpEnv(DirectRLEnv):
                 (air_clipped.var(dim=-1) + con_clipped.var(dim=-1)) * grav_clamp
             )
 
-        # ── Feet gait (diagonal sync) ────────────────────────────────────────
+        # ── Feet gait (robot_lab GaitReward — sync diagonal pairs, async cross) ──
+        # Synced pairs: (FL, RR) and (FR, RL). Indices: FL=0, FR=1, RL=2, RR=3
         rew_gait = torch.zeros(self.num_envs, device=self.device)
-        if cf_idx:
-            gait_sync = (contact_bool[:, 0].float() * contact_bool[:, 3].float()
-                       + contact_bool[:, 1].float() * contact_bool[:, 2].float()) * 0.5
-            rew_gait = cfg.rew_feet_gait * gait_sync
+        if cf_idx and self.contact_sensor.data.current_air_time is not None:
+            air = self.contact_sensor.data.current_air_time[:, cf_idx]
+            con = self.contact_sensor.data.current_contact_time[:, cf_idx]
+            max_sq = cfg.feet_gait_max_err ** 2
+
+            def sync_r(a, b):
+                se_air = (air[:, a] - air[:, b]).pow(2).clamp(max=max_sq)
+                se_con = (con[:, a] - con[:, b]).pow(2).clamp(max=max_sq)
+                return torch.exp(-(se_air + se_con) / cfg.feet_gait_std)
+
+            def async_r(a, b):
+                se_0 = (air[:, a] - con[:, b]).pow(2).clamp(max=max_sq)
+                se_1 = (con[:, a] - air[:, b]).pow(2).clamp(max=max_sq)
+                return torch.exp(-(se_0 + se_1) / cfg.feet_gait_std)
+
+            # Synced: FL-RR (0,3) and FR-RL (1,2)
+            sync = sync_r(0, 3) * sync_r(1, 2)
+            # Async: 4 cross pairs
+            async_r0 = async_r(0, 1)  # FL vs FR
+            async_r1 = async_r(3, 2)  # RR vs RL
+            async_r2 = async_r(0, 2)  # FL vs RL
+            async_r3 = async_r(1, 3)  # FR vs RR
+            asyn = async_r0 * async_r1 * async_r2 * async_r3
+
+            cmd_active = (self.commands.norm(dim=-1) > 0.06) | \
+                         (self.robot.data.root_lin_vel_w[:, :2].norm(dim=-1) > 0.5)
+            rew_gait = cfg.rew_feet_gait * torch.where(
+                cmd_active, sync * asyn, torch.zeros_like(sync)
+            ) * grav_clamp
 
         # ── Feet slide (robot_lab: body-frame foot lateral velocity × contact) ───
         rew_slide = torch.zeros(self.num_envs, device=self.device)
@@ -301,7 +327,13 @@ class OrixAmpEnv(DirectRLEnv):
         joint_dev_l1 = (jpos - self.action_offset).abs().sum(dim=-1)
         cmd_small = (self.commands.norm(dim=-1) < 0.06).float()
         rew_stand = cfg.rew_stand_still * joint_dev_l1 * cmd_small * grav_clamp
-        rew_no_cmd = cfg.rew_feet_contact_no_cmd * cmd_zero.float()
+        # robot_lab: sum(first_contact) when cmd<0.1 × grav_clamp
+        rew_no_cmd = torch.zeros(self.num_envs, device=self.device)
+        if cf_idx:
+            first_contact_no_cmd = self.contact_sensor.compute_first_contact(self.step_dt)[:, cf_idx]
+            cmd_zero_strict = (self.commands.norm(dim=-1) < 0.1).float()
+            rew_no_cmd = cfg.rew_feet_contact_no_cmd * \
+                first_contact_no_cmd.float().sum(dim=-1) * cmd_zero_strict * grav_clamp
 
         # ── Contacts ──────────────────────────────────────────────────────────
         rew_undesired = torch.zeros(self.num_envs, device=self.device)

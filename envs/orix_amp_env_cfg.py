@@ -121,6 +121,8 @@ class OrixAmpEnvCfg(DirectRLEnvCfg):
     feet_air_time_threshold:    float =  0.1
     rew_feet_air_time_variance: float = -1.0
     rew_feet_gait:              float =  0.5
+    feet_gait_std:              float =  0.1     # exp kernel sigma for sync/async
+    feet_gait_max_err:          float =  0.2     # clip squared error
     rew_feet_slide:             float = -0.1
     rew_feet_contact_no_cmd:    float =  0.1
     rew_feet_height_body:       float = -1.0     # penalise feet too high relative to body
